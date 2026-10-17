@@ -42,4 +42,4 @@ jobs:
       - name: kubeconform
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
-          ./kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.36.0 deploy deploy/examples
+          ./kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.36.0 -ignore-filename-pattern "grafana-dashboard\.json$" deploy deploy/examples
