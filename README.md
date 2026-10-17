@@ -359,10 +359,40 @@ rounded down to 64 MiB.
 
 ## Metrics
 
-`dri_vram_total_bytes`, `dri_vram_published_bytes`, `dri_vram_allocated_bytes`,
-`dri_vram_used_bytes` (per GPU), `dri_claims_prepared`, `dri_gpus_skipped`,
-`dri_prepare_errors_total`, `dri_discovery_errors_total`. Example alerts:
-[`deploy/examples/alerts.yaml`](deploy/examples/alerts.yaml).
+Per GPU (labels `device`, `vendor`, `pci_bus_id`), refreshed on every rescan:
+
+| Metric | Meaning |
+|---|---|
+| `dri_vram_total_bytes` | VRAM the GPU reports |
+| `dri_vram_published_bytes` | VRAM offered to the scheduler (total minus the reserve) |
+| `dri_vram_allocated_bytes` | VRAM promised to prepared claims |
+| `dri_vram_used_bytes` | VRAM in use, from the kernel driver |
+| `dri_gtt_used_bytes` | system RAM mapped for the GPU (GTT); grows when VRAM is full and buffers are evicted to RAM |
+| `dri_gpu_temperature_celsius` | GPU temperature (hwmon) |
+| `dri_gpu_core_clock_hertz`, `dri_gpu_memory_clock_hertz` | current core and memory clocks (hwmon) |
+
+Per node: `dri_claims_prepared`, `dri_gpus_skipped`,
+`dri_prepare_errors_total`, `dri_discovery_errors_total`. A reading the
+backend cannot take is left out rather than reported as zero.
+
+Ready-made monitoring in [`deploy/examples/`](deploy/examples/):
+
+- [`podmonitor.yaml`](deploy/examples/podmonitor.yaml): Prometheus Operator
+  scrape config that adds a `node` label (device names repeat across
+  identical machines);
+- [`alerts.yaml`](deploy/examples/alerts.yaml): prepare errors, a workload
+  using more VRAM than it claimed, VRAM nearly full, VRAM evicted to RAM,
+  skipped GPUs;
+- [`grafana-dashboard.json`](deploy/examples/grafana-dashboard.json): per
+  node and GPU: claimed, used and offered VRAM, eviction to RAM,
+  temperature, clocks.
+
+**Why GTT matters:** a VRAM claim is not enforced. When workloads together
+use more VRAM than the GPU has, the kernel moves buffers to system RAM and
+everything on that GPU slows down. On a FirePro D700, four llama.cpp
+instances that need ~2 GiB each on one 6 GiB GPU pushed 3.4 GiB into GTT and
+cut total generation speed from 41 to 16 tokens/s; a single instance that
+fits keeps ~0.3 GiB in GTT.
 
 ## Comparison
 

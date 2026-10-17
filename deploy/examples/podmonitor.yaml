@@ -1,0 +1,17 @@
+# Scrapes the plugin with the Prometheus Operator. The `node` label is what
+# the example dashboard and alerts group by: device names (PCI addresses)
+# repeat across identical machines.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: dra-driver-dri
+  namespace: dra-driver-dri
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dra-driver-dri
+  podMetricsEndpoints:
+    - port: metrics
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
