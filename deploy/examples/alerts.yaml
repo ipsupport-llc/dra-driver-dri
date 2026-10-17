@@ -12,7 +12,8 @@ spec:
           annotations:
             summary: "{{ $labels.instance }}: GPU claims fail to prepare"
         - alert: DRIVRAMOverUse
-          expr: dri_vram_used_bytes > dri_vram_allocated_bytes and dri_vram_allocated_bytes > 0
+          # used includes kernel/firmware memory, which the reserve (total - published) covers
+          expr: dri_vram_used_bytes > dri_vram_allocated_bytes + (dri_vram_total_bytes - dri_vram_published_bytes) and dri_vram_allocated_bytes > 0
           for: 10m
           labels: {severity: warning}
           annotations:
