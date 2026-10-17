@@ -61,3 +61,22 @@ tg was `tg128` on one GPU and on CPU, `tg256`/`tg2048` for the parallel runs.
   load reached 66 / 70 °C after 3 minutes at ~1450 rpm.
 - Idle GPU clocks are already the lowest DPM level (300 / 150 MHz); idle
   power is not measured yet.
+
+## Several instances on one GPU: VRAM and GTT
+
+Same node, all instances on the GPU on bus 06 (`-dev Vulkan0`), VRAM and GTT
+read from `mem_info_vram_used` / `mem_info_gtt_used` while they ran.
+
+| Load | VRAM used | GTT used | Generation, tokens/s |
+|---|---|---|---|
+| idle | 6 MiB | 5 MiB | |
+| 1 × LFM2.5-2.6B | 2068 MiB | 287 MiB | 41.1 |
+| 3 × Gemma 4 E2B | 5211 MiB | 998 MiB | 3 × 6.9 = 20.8 (one alone: 19.6) |
+| 4 × LFM2.5-2.6B | 5942 MiB (of 6144) | 3448 MiB | 4 × 4.0 = 15.9 (one alone: 41.1) |
+
+- Each llama.cpp process keeps roughly 0.3 GiB in GTT even when its model
+  fits in VRAM, so GTT alone is not a sign of trouble.
+- Overcommitting VRAM does not fail: the kernel evicts buffers to system RAM
+  (GTT) and the GPU slows down. Four 2.6B instances ran at 39 % of the
+  throughput of one. The example alert fires on GTT above 1 GiB while VRAM
+  is over 90 % used: the last row trips it, the others do not.

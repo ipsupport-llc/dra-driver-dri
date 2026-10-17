@@ -122,7 +122,7 @@ func (d *Driver) Inventory() map[string]devices.Published {
 
 func (d *Driver) refreshMetrics() {
 	pubs := slices.Collect(maps.Values(d.Inventory()))
-	d.metrics.Update(pubs, d.prep.Allocated(), d.det.Used, d.prep.Count())
+	d.metrics.Update(pubs, d.prep.Allocated(), d.det.Stats, d.prep.Count())
 }
 
 func (d *Driver) skippedGauge() prometheus.Collector { return d.metrics.SkippedGauge() }

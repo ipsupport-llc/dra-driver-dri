@@ -132,10 +132,11 @@ Device names are `<claim-uid>-<device>[-<share-id>]`:
 - Every 30 s (and at start) the plugin walks `/sys/class/drm/renderD*`,
   resolves each to its PCI device, reads vendor/device IDs and the bound
   kernel driver, and asks the matching backend for VRAM.
-- Backend interface: `TotalVRAM(dev) (bytes, error)` and
-  `UsedVRAM(dev) (bytes, error)`.
-  - `amdgpu`: `mem_info_vram_total` / `mem_info_vram_used` in the PCI
-    device's sysfs directory.
+- Backend interface: `Total(dev) (bytes, error)` and `Stats(dev)` (the
+  live readings it can take: VRAM and GTT in use, temperature, clocks).
+  - `amdgpu`: `mem_info_vram_total`, `mem_info_vram_used`,
+    `mem_info_gtt_used` in the PCI device's sysfs directory; `temp1_input`
+    and the `freqN_input` labelled `sclk` / `mclk` in its `hwmon` directory.
 - **Override:** a config file may set VRAM per PCI address for GPUs without
   a backend. A GPU with neither a backend nor an override is skipped and
   logged.
@@ -179,6 +180,10 @@ Prometheus metrics, per GPU (`device`, `vendor`, `pci_bus_id` labels):
 - `dri_vram_total_bytes`, `dri_vram_published_bytes`,
   `dri_vram_allocated_bytes` (sum of prepared claims),
   `dri_vram_used_bytes` (backend reading);
+- `dri_gtt_used_bytes` (system RAM mapped for the GPU; grows when VRAM is
+  evicted), `dri_gpu_temperature_celsius`, `dri_gpu_core_clock_hertz`,
+  `dri_gpu_memory_clock_hertz` (hwmon); a backend reports what it can read,
+  the rest is left out;
 - `dri_claims_prepared`, `dri_gpus_skipped`, `dri_prepare_errors_total`,
   `dri_discovery_errors_total`.
 
@@ -188,7 +193,8 @@ Suggested alerts (shipped as examples):
 - prepare errors increasing;
 - `used > allocated + reserve` for 10 minutes (a workload uses more than it
   claimed; the reserve covers kernel and firmware use);
-- `used > 95 %` of total.
+- `used > 95 %` of total;
+- VRAM evicted to RAM: GTT above 1 GiB while VRAM is over 90 % used.
 
 ## 12. Failure handling
 

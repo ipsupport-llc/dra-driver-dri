@@ -14,7 +14,7 @@ type FakeGPU struct {
 	VendorID   string            // e.g. "0x1002"; empty = no vendor file
 	DeviceID   string            // e.g. "0x6798"
 	Driver     string            // bound kernel driver; empty = unbound
-	Files      map[string]string // extra files in the device dir
+	Files      map[string]string // extra files in the device dir; names may contain subdirectories
 }
 
 // AddGPU creates the device directory, its driver link and the render node
@@ -28,6 +28,7 @@ func AddGPU(t testing.TB, root string, g FakeGPU) string {
 	}
 	write(t, filepath.Join(dev, "device"), g.DeviceID+"\n")
 	for name, content := range g.Files {
+		mkdir(t, filepath.Dir(filepath.Join(dev, name)))
 		write(t, filepath.Join(dev, name), content)
 	}
 	if g.Driver != "" {

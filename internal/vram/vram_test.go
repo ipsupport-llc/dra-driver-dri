@@ -2,6 +2,7 @@ package vram_test
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,9 +36,37 @@ func TestAMDGPUTotalAndUsed(t *testing.T) {
 	if err != nil || total != 6*gib {
 		t.Fatalf("Total = %d, %v; want %d", total, err, 6*gib)
 	}
-	used, ok := d.Used(g)
-	if !ok || used != 123456 {
-		t.Fatalf("Used = %d, %v; want 123456, true", used, ok)
+	if s := d.Stats(g); s[vram.VRAMUsed] != 123456 {
+		t.Fatalf("Stats = %v; want VRAMUsed 123456", s)
+	}
+}
+
+func TestAMDGPUStats(t *testing.T) {
+	g := scanOne(t, d700(map[string]string{
+		"mem_info_vram_total":      "6442450944\n",
+		"mem_info_vram_used":       "2168455168\n",
+		"mem_info_gtt_used":        "300941312\n",
+		"hwmon/hwmon3/name":        "amdgpu\n",
+		"hwmon/hwmon3/temp1_input": "49000\n",
+		"hwmon/hwmon3/freq1_label": "mclk\n",
+		"hwmon/hwmon3/freq1_input": "1370000000\n",
+		"hwmon/hwmon3/freq2_label": "sclk\n",
+		"hwmon/hwmon3/freq2_input": "850000000\n",
+		"hwmon/hwmon3/freq3_label": "fclk\n",
+		"hwmon/hwmon3/freq3_input": "1\n",
+	}))
+	want := vram.Stats{vram.VRAMUsed: 2168455168, vram.GTTUsed: 300941312, vram.Temperature: 49, vram.CoreClock: 850e6, vram.MemoryClock: 1370e6}
+	if got := vram.NewDetector(nil).Stats(g); !maps.Equal(got, want) {
+		t.Fatalf("Stats = %v, want %v", got, want)
+	}
+}
+
+func TestAMDGPUStatsPartial(t *testing.T) {
+	// No hwmon directory, unreadable GTT counter: only what can be read.
+	g := scanOne(t, d700(map[string]string{"mem_info_vram_used": "1024\n", "mem_info_gtt_used": "n/a\n"}))
+	want := vram.Stats{vram.VRAMUsed: 1024}
+	if got := vram.NewDetector(nil).Stats(g); !maps.Equal(got, want) {
+		t.Fatalf("Stats = %v, want %v", got, want)
 	}
 }
 
@@ -66,10 +95,10 @@ func TestUnknownVRAM(t *testing.T) {
 	}
 }
 
-func TestUsedWithoutBackend(t *testing.T) {
+func TestStatsWithoutBackend(t *testing.T) {
 	g := scanOne(t, sysfstest.FakeGPU{RenderNode: "renderD128", PCIAddress: "0000:03:00.0", VendorID: "0x8086", DeviceID: "0xe20b", Driver: "xe"})
-	if _, ok := vram.NewDetector(vram.Overrides{"0000:03:00.0": 16 * gib}).Used(g); ok {
-		t.Fatal("Used reported a value without a backend")
+	if s := vram.NewDetector(vram.Overrides{"0000:03:00.0": 16 * gib}).Stats(g); len(s) != 0 {
+		t.Fatalf("Stats reported %v without a backend", s)
 	}
 }
 

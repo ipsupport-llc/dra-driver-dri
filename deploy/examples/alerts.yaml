@@ -24,6 +24,14 @@ spec:
           labels: {severity: warning}
           annotations:
             summary: "{{ $labels.device }}: VRAM over 95 % used"
+        - alert: DRIVRAMEvictedToRAM
+          # Each Vulkan process keeps a few hundred MiB in GTT normally; with
+          # VRAM full, buffers move there and the GPU slows down several times.
+          expr: dri_gtt_used_bytes > 1073741824 and dri_vram_used_bytes / dri_vram_total_bytes > 0.9
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.node }} {{ $labels.device }}: VRAM is full and buffers spill into system RAM"
         - alert: DRIGPUsSkipped
           expr: dri_gpus_skipped > 0
           for: 30m
