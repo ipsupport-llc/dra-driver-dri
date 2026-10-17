@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 
 	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
 	cdiparser "tags.cncf.io/container-device-interface/pkg/parser"
@@ -75,11 +76,7 @@ func (w *Writer) WriteClaim(claimUID string, edits []Edit) error {
 					Permissions: "rw",
 					FileMode:    &mode,
 				}},
-				Env: []string{
-					"DRA_GPU_PCI_BUS_ID=" + e.PCIAddress,
-					"DRA_GPU_VENDOR=" + e.Vendor,
-					fmt.Sprintf("DRA_GPU_VRAM_BYTES=%d", e.VRAMBytes),
-				},
+				Env: env(e),
 			},
 		})
 	}
@@ -92,6 +89,23 @@ func (w *Writer) WriteClaim(claimUID string, edits []Edit) error {
 		return fmt.Errorf("write CDI spec for claim %s: %w", claimUID, err)
 	}
 	return nil
+}
+
+// env describes one GPU twice: as DRA_GPU_* for the common one-GPU
+// container, and as DRA_GPU_<DEVICE>_* so a container with several GPUs
+// (several claims, or a claim with several devices) sees each of them; the
+// unsuffixed set then names one of them, unspecified which.
+func env(e Edit) []string {
+	key := "DRA_GPU_" + strings.ToUpper(strings.ReplaceAll(e.Device, "-", "_")) + "_"
+	var out []string
+	for _, prefix := range []string{"DRA_GPU_", key} {
+		out = append(out,
+			prefix+"PCI_BUS_ID="+e.PCIAddress,
+			prefix+"VENDOR="+e.Vendor,
+			fmt.Sprintf("%sVRAM_BYTES=%d", prefix, e.VRAMBytes),
+		)
+	}
+	return out
 }
 
 // DeleteClaim removes the claim's spec; a missing spec is not an error.

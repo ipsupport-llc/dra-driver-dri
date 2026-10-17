@@ -1,0 +1,40 @@
+# The plugin's ServiceAccount may create, update and delete only the
+# ResourceSlices of the node its pod runs on (the node comes from the
+# pod-bound ServiceAccount token). Adapted from kubernetes-sigs/dra-example-driver.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: dra-driver-dri-resourceslices
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["resource.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["resourceslices"]
+  matchConditions:
+    - name: isPlugin
+      expression: request.userInfo.username == "system:serviceaccount:dra-driver-dri:dra-driver-dri"
+  variables:
+    - name: userNodeName
+      expression: >-
+        request.userInfo.extra[?'authentication.kubernetes.io/node-name'][0].orValue('')
+    - name: objectNodeName
+      expression: >-
+        (request.operation == "DELETE" ? oldObject : object).spec.?nodeName.orValue("")
+  validations:
+    - expression: variables.userNodeName != ""
+      message: no node in the ServiceAccount token; the plugin must run in a pod on a node
+    - expression: variables.userNodeName == variables.objectNodeName
+      messageExpression: >-
+        "the plugin on node '" + variables.userNodeName + "' may not modify " +
+        (variables.objectNodeName == "" ? "cluster-scoped ResourceSlices" : "ResourceSlices of node '" + variables.objectNodeName + "'")
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: dra-driver-dri-resourceslices
+spec:
+  policyName: dra-driver-dri-resourceslices
+  validationActions: [Deny]

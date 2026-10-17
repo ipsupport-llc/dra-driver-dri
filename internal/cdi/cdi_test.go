@@ -60,7 +60,12 @@ func TestWriteClaim(t *testing.T) {
 	if n.Path != "/dev/dri/renderD128" || n.Permissions != "rw" || n.FileMode == nil || *n.FileMode != 0o666 {
 		t.Errorf("device node = %+v", n)
 	}
-	for _, want := range []string{"DRA_GPU_PCI_BUS_ID=0000:06:00.0", "DRA_GPU_VENDOR=amd", "DRA_GPU_VRAM_BYTES=2147483648"} {
+	for _, want := range []string{
+		"DRA_GPU_PCI_BUS_ID=0000:06:00.0", "DRA_GPU_VENDOR=amd", "DRA_GPU_VRAM_BYTES=2147483648",
+		// Per-device variables: a container with several GPUs gets one set per GPU.
+		"DRA_GPU_PCI_0000_06_00_0_PCI_BUS_ID=0000:06:00.0", "DRA_GPU_PCI_0000_06_00_0_VENDOR=amd",
+		"DRA_GPU_PCI_0000_06_00_0_VRAM_BYTES=2147483648",
+	} {
 		if !slices.Contains(d.ContainerEdits.Env, want) {
 			t.Errorf("env %v lacks %q", d.ContainerEdits.Env, want)
 		}

@@ -122,7 +122,10 @@ Device names are `<claim-uid>-<device>[-<share-id>]`:
   - `DRA_GPU_PCI_BUS_ID` (e.g. `0000:06:00.0`),
   - `DRA_GPU_VENDOR` (e.g. `amd`),
   - `DRA_GPU_VRAM_BYTES` (the allocated amount; workloads can size their
-    context/batch from it).
+    context/batch from it);
+  - the same three as `DRA_GPU_<DEVICE>_*` (device name upper-cased, `-` →
+    `_`), so a container with several GPUs sees each one; the unsuffixed set
+    then names one of them.
 
 ## 8. Discovery and backends
 
@@ -160,8 +163,9 @@ cluster's own infrastructure code deploys it.
   `/var/lib/kubelet/plugins`, `/var/lib/kubelet/plugins_registry`,
   `/var/run/cdi`, `/sys` (read-only). No privileges beyond what the plugin
   registration and CDI directory require.
-- **RBAC:** create/update/delete `resourceslices` for its node; get/list
-  `resourceclaims`; get `nodes`.
+- **RBAC:** read `resourceclaims` (the plugin never writes claim status),
+  read `nodes`, write `resourceslices`; a ValidatingAdmissionPolicy limits
+  slice writes to the node in the plugin pod's ServiceAccount token.
 - **DeviceClass** selecting `device.driver == "<driver-name>"`.
 - **Image:** `ghcr.io/ipsupport-llc/dra-driver-dri`, public, built by GitHub
   Actions on each PR (lint, tests, build) and pushed on tags.
@@ -182,7 +186,8 @@ Suggested alerts (shipped as examples):
 
 - plugin not running on a labelled GPU node;
 - prepare errors increasing;
-- `used > allocated` for 10 minutes (a workload uses more than it claimed);
+- `used > allocated + reserve` for 10 minutes (a workload uses more than it
+  claimed; the reserve covers kernel and firmware use);
 - `used > 95 %` of total.
 
 ## 12. Failure handling
