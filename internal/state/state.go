@@ -165,7 +165,7 @@ func (s *Store) save() error {
 	if err != nil {
 		return fmt.Errorf("sync checkpoint dir: %w", err)
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	if err := dir.Sync(); err != nil {
 		return fmt.Errorf("sync checkpoint dir: %w", err)
 	}
