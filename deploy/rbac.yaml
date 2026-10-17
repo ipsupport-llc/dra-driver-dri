@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dra-driver-dri
+  namespace: dra-driver-dri
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dra-driver-dri
+rules:
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims/status"]
+    verbs: ["update"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims/driver"]
+    verbs: ["associated-node:update", "associated-node:patch"]
+    resourceNames: ["gpu.example.com"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceslices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dra-driver-dri
+subjects:
+  - kind: ServiceAccount
+    name: dra-driver-dri
+    namespace: dra-driver-dri
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dra-driver-dri

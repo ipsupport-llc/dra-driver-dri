@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dra-driver-dri
+  namespace: dra-driver-dri
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: dra-driver-dri}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: dra-driver-dri}
+    spec:
+      serviceAccountName: dra-driver-dri
+      priorityClassName: system-node-critical
+      nodeSelector: {gpu: dri}
+      containers:
+        - name: plugin
+          image: ghcr.io/ipsupport-llc/dra-driver-dri:0.1.0
+          env:
+            - {name: DRIVER_NAME, value: gpu.example.com}
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+          ports:
+            - {name: metrics, containerPort: 8080}
+          livenessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: plugins-registry, mountPath: /var/lib/kubelet/plugins_registry}
+            - {name: plugins, mountPath: /var/lib/kubelet/plugins}
+            - {name: cdi, mountPath: /var/run/cdi}
+            - {name: sys, mountPath: /sys, readOnly: true}
+      volumes:
+        - name: plugins-registry
+          hostPath: {path: /var/lib/kubelet/plugins_registry, type: Directory}
+        - name: plugins
+          hostPath: {path: /var/lib/kubelet/plugins, type: DirectoryOrCreate}
+        - name: cdi
+          hostPath: {path: /var/run/cdi, type: DirectoryOrCreate}
+        - name: sys
+          hostPath: {path: /sys, type: Directory}

@@ -1,0 +1,15 @@
+# 2 GiB of VRAM on any GPU of the class; add a selector to pin a vendor/model.
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: vram-2gi
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.example.com
+            capacity:
+              requests:
+                vram: 2Gi

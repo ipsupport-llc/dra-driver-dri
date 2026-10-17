@@ -1,0 +1,17 @@
+# Lists the Vulkan devices the pod sees: exactly one GPU is expected.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vulkan-list-devices
+spec:
+  restartPolicy: Never
+  resourceClaims:
+    - name: gpu
+      resourceClaimTemplateName: vram-2gi
+  containers:
+    - name: llama
+      image: ghcr.io/ggml-org/llama.cpp:server-vulkan
+      args: ["--list-devices"]
+      resources:
+        claims:
+          - name: gpu
