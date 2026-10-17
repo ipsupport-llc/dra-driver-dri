@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 )
@@ -138,12 +139,35 @@ func (s *Store) save() error {
 	if err != nil {
 		return fmt.Errorf("encode checkpoint: %w", err)
 	}
+	// Write, fsync, rename, fsync the directory: a power loss leaves either
+	// the old or the new checkpoint, never an empty file (which would stop
+	// the plugin from starting).
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("write checkpoint: %w", err)
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write checkpoint: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync checkpoint: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("write checkpoint: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		return fmt.Errorf("replace checkpoint: %w", err)
+	}
+	dir, err := os.Open(filepath.Dir(s.path))
+	if err != nil {
+		return fmt.Errorf("sync checkpoint dir: %w", err)
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync checkpoint dir: %w", err)
 	}
 	return nil
 }
