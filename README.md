@@ -70,66 +70,270 @@ CRDs, no scheduler extender.
 - For Vulkan workloads: a Vulkan driver in the workload image (e.g. Mesa RADV
   for AMD).
 
-## Quick start
+## Installation
 
-1. Label your GPU nodes:
+### 1. Node prerequisites
 
-   ```sh
-   kubectl label node <gpu-node> gpu=dri
-   ```
+On every GPU node:
 
-2. Pick a driver name in a domain you own (e.g. `gpu.example.com`), set it in
-   `deploy/daemonset.yaml` and `deploy/deviceclass.yaml`, then install:
+- **The GPU's kernel driver is loaded and exposes a render node.** Check:
+  `ls -l /dev/dri/` shows `renderD128`, `renderD129`, …; for AMD,
+  `cat /sys/class/drm/renderD128/device/mem_info_vram_total` prints the VRAM
+  size in bytes.
+- **The container runtime has CDI enabled.**
+  - containerd 2.x (and k3s/RKE2 releases that bundle it): enabled by
+    default, spec dirs `/etc/cdi` and `/var/run/cdi`. Nothing to do.
+  - containerd 1.7: in the CRI plugin section of `config.toml` set
+    `enable_cdi = true` and `cdi_spec_dirs = ["/etc/cdi", "/var/run/cdi"]`,
+    then restart containerd.
+  - CRI-O: enabled by default.
+- **Nothing GPU-specific in the node's userspace.** Vulkan drivers (e.g. Mesa
+  RADV) belong in the workload image, not on the node.
 
-   ```sh
-   kubectl apply -f deploy/namespace.yaml
-   kubectl apply -f deploy/
-   ```
+Label the GPU nodes:
 
-3. Check the published GPUs:
+```sh
+kubectl label node <gpu-node> gpu=dri
+```
 
-   ```sh
-   kubectl get resourceslices
-   ```
+### 2. Cluster prerequisites
 
-4. Claim VRAM from a pod:
+- **Kubernetes 1.36 or newer:** DRA and consumable capacity are on by
+  default; nothing to enable.
+- **Kubernetes 1.34–1.35:** enable the `DRAConsumableCapacity` feature gate on
+  the API server, scheduler, controller manager and kubelet.
+- The node-scoping policy (`deploy/validatingadmissionpolicy.yaml`) relies on
+  ServiceAccount tokens that carry the node name (on by default in current
+  Kubernetes). On a cluster without it, leave that file out.
 
-   ```yaml
-   apiVersion: resource.k8s.io/v1
-   kind: ResourceClaimTemplate
-   metadata:
-     name: vram-2gi
-   spec:
-     spec:
-       devices:
-         requests:
-           - name: gpu
-             exactly:
-               deviceClassName: gpu.example.com
-               capacity:
-                 requests:
-                   vram: 2Gi
-   ---
-   apiVersion: v1
-   kind: Pod
-   metadata:
-     name: llama
-   spec:
-     resourceClaims:
-       - name: gpu
-         resourceClaimTemplateName: vram-2gi
-     containers:
-       - name: llama
-         image: ghcr.io/ggml-org/llama.cpp:server-vulkan
-         args: ["--list-devices"]
-         resources:
-           claims:
-             - name: gpu
-   ```
+### 3. k3s
 
-   More in [`deploy/examples/`](deploy/examples/).
+k3s runs the API server, scheduler and kubelet in one binary, so everything
+above is set in `/etc/rancher/k3s/config.yaml` (or as `k3s server` /
+`k3s agent` flags):
+
+```yaml
+# GPU agent node: label at registration (also re-applied on agent restart)
+node-label:
+  - gpu=dri
+```
+
+```yaml
+# Only for Kubernetes 1.34–1.35, on the servers (and kubelet-arg on agents too)
+kube-apiserver-arg:
+  - feature-gates=DRAConsumableCapacity=true
+kube-scheduler-arg:
+  - feature-gates=DRAConsumableCapacity=true
+kube-controller-manager-arg:
+  - feature-gates=DRAConsumableCapacity=true
+kubelet-arg:
+  - feature-gates=DRAConsumableCapacity=true
+```
+
+The k3s kubelet uses the standard `/var/lib/kubelet`, and current k3s bundles
+containerd 2.x, so the reference manifests work unchanged.
+
+### 4. Other distributions
+
+If the kubelet root is not `/var/lib/kubelet` (MicroK8s, for example, uses
+`/var/snap/microk8s/common/var/lib/kubelet`), point both the hostPath volumes
+in `deploy/daemonset.yaml` and the plugin at it:
+`KUBELET_PLUGINS_DIRECTORY_PATH=<root>/plugins`,
+`KUBELET_REGISTRAR_DIRECTORY_PATH=<root>/plugins_registry`.
+
+### 5. Install the driver
+
+Pick a driver name in a domain you own (e.g. `gpu.example.com`). Set it in
+`deploy/daemonset.yaml` (`DRIVER_NAME`) and `deploy/deviceclass.yaml`, and the
+plugin's namespace/ServiceAccount in `deploy/validatingadmissionpolicy.yaml`
+if you change them. Then:
+
+```sh
+kubectl apply -f deploy/namespace.yaml
+kubectl apply -f deploy/
+```
 
 The image is `ghcr.io/ipsupport-llc/dra-driver-dri` (public).
+
+### 6. Check it
+
+```sh
+kubectl -n dra-driver-dri get pods -o wide          # one plugin pod per GPU node
+kubectl -n dra-driver-dri logs ds/dra-driver-dri    # "Publishing GPUs" count=N
+kubectl get resourceslices                         # one slice per GPU node
+kubectl get resourceslice -o yaml | grep -A3 vram  # VRAM offered per GPU
+```
+
+Then run the pod from [`deploy/examples/vulkan-pod.yaml`](deploy/examples/vulkan-pod.yaml)
+(with its claim template): its log lists exactly one Vulkan device.
+
+### Claim VRAM from a pod
+
+```yaml
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: vram-2gi
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.example.com
+            capacity:
+              requests:
+                vram: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: llama
+spec:
+  resourceClaims:
+    - name: gpu
+      resourceClaimTemplateName: vram-2gi
+  containers:
+    - name: llama
+      image: ghcr.io/ggml-org/llama.cpp:server-vulkan
+      args: ["--list-devices"]
+      resources:
+        claims:
+          - name: gpu
+```
+
+More in [`deploy/examples/`](deploy/examples/) and the recipes below.
+
+## Placement recipes
+
+The driver name below is `gpu.example.com`; the DeviceClass has the same
+name. The driver's own attributes are read in CEL as
+`device.attributes["gpu.example.com"].<name>` (`vendor`, `kernelDriver`,
+`deviceID`, `renderNode`); the PCI address is the standard
+`device.attributes["resource.kubernetes.io"].pciBusID`.
+
+### Several small models per GPU (share by VRAM)
+
+Ask for the VRAM the model needs — weights, KV cache and compute buffers.
+Every pod of a Deployment gets its own claim from the template, and the
+scheduler packs them onto GPUs until the VRAM runs out:
+
+```yaml
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: whisper-1500mi
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.example.com
+            capacity:
+              requests:
+                vram: 1500Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whisper
+spec:
+  replicas: 6
+  selector:
+    matchLabels: {app: whisper}
+  template:
+    metadata:
+      labels: {app: whisper}
+    spec:
+      resourceClaims:
+        - name: gpu
+          resourceClaimTemplateName: whisper-1500mi   # one claim per pod
+      containers:
+        - name: whisper
+          image: <your whisper.cpp Vulkan image>
+          resources:
+            claims:
+              - name: gpu
+```
+
+### One model per GPU (spread over GPUs)
+
+Placement is first-fit, so shared claims fill one GPU before the next. To
+give each replica a GPU of its own, claim **whole GPUs** — no `vram` amount.
+A whole-GPU claim cannot share, so N replicas land on N different GPUs:
+
+```yaml
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: whole-gpu
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.example.com   # no capacity → the whole GPU
+```
+
+### Only some GPUs (vendor, model)
+
+```yaml
+          exactly:
+            deviceClassName: gpu.example.com
+            selectors:
+              - cel:
+                  expression: >-
+                    device.attributes["gpu.example.com"].vendor == "amd" &&
+                    device.attributes["gpu.example.com"].deviceID == "0x6798"
+            capacity:
+              requests:
+                vram: 2Gi
+```
+
+### One specific GPU
+
+```yaml
+            selectors:
+              - cel:
+                  expression: device.attributes["resource.kubernetes.io"].pciBusID == "0000:02:00.0"
+```
+
+Combine with a `nodeSelector` on the pod when several nodes have a GPU at that
+address.
+
+### One model on two GPUs (split across GPUs)
+
+Both devices of one claim are always on the same node:
+
+```yaml
+          exactly:
+            deviceClassName: gpu.example.com
+            allocationMode: ExactCount
+            count: 2                          # two whole GPUs
+```
+
+### Replicas on different nodes
+
+GPU placement and node spreading combine: add a standard topology spread (or
+pod anti-affinity) on `kubernetes.io/hostname`:
+
+```yaml
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: whisper}
+```
+
+### Do not share one claim between replicas
+
+`resourceClaimTemplateName` gives every pod its own claim. A pre-created
+`ResourceClaim` referenced by `resourceClaimName` is **one** allocation: every
+pod that references it lands on the same GPU and shares that one VRAM amount.
 
 ## Inside the container
 
