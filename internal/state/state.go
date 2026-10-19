@@ -22,6 +22,10 @@ type Device struct {
 	ShareID      string   `json:"shareID,omitempty"`
 	VRAMBytes    int64    `json:"vramBytes"`
 	CDIDeviceIDs []string `json:"cdiDeviceIDs"`
+	// The pod the claim is reserved for, for per-pod VRAM attribution.
+	PodUID       string `json:"podUID,omitempty"`
+	PodNamespace string `json:"podNamespace,omitempty"`
+	PodName      string `json:"podName,omitempty"`
 }
 
 type checkpoint struct {

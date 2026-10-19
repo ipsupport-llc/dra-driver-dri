@@ -31,7 +31,9 @@ func mustWrite(t *testing.T, path, body string) {
 	}
 }
 
-func itoa(n int) string { return string(rune('0'+n/1000%10)) + string(rune('0'+n/100%10)) + string(rune('0'+n/10%10)) + string(rune('0'+n%10)) }
+func itoa(n int) string {
+	return string(rune('0'+n/1000%10)) + string(rune('0'+n/100%10)) + string(rune('0'+n/10%10)) + string(rune('0'+n%10))
+}
 
 const amdgpuFdinfo = `pos:	0
 flags:	02000002

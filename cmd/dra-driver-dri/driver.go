@@ -20,6 +20,7 @@ import (
 	"github.com/ipsupport-llc/dra-driver-dri/internal/devices"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/metrics"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/prepare"
+	"github.com/ipsupport-llc/dra-driver-dri/internal/procvram"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/sysfs"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/vram"
 )
@@ -122,7 +123,12 @@ func (d *Driver) Inventory() map[string]devices.Published {
 
 func (d *Driver) refreshMetrics() {
 	pubs := slices.Collect(maps.Values(d.Inventory()))
-	d.metrics.Update(pubs, d.prep.Allocated(), d.det.Stats, d.prep.Count())
+	// Per-pod VRAM from DRM fdinfo (the DaemonSet runs with hostPID, so /proc
+	// shows every process). A scan error leaves the per-pod series empty for
+	// this cycle rather than dropping the GPU gauges.
+	usages, _ := procvram.Scan("/proc")
+	claimVRAM := metrics.Attribute(d.prep.ClaimPods(), pubs, usages)
+	d.metrics.Update(pubs, d.prep.Allocated(), d.det.Stats, d.prep.Count(), claimVRAM)
 }
 
 func (d *Driver) skippedGauge() prometheus.Collector { return d.metrics.SkippedGauge() }
