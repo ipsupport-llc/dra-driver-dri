@@ -15,6 +15,7 @@ var labels = []string{"device", "vendor", "pci_bus_id"}
 type Metrics struct {
 	reg                            *prometheus.Registry
 	total, published, allocated    *prometheus.GaugeVec
+	claimUsed, claimClaimed        *prometheus.GaugeVec
 	stats                          map[vram.Stat]*prometheus.GaugeVec
 	claims, skipped                prometheus.Gauge
 	PrepareErrors, DiscoveryErrors prometheus.Counter
@@ -31,6 +32,14 @@ func New() *Metrics {
 		total:     gauge("dri_vram_total_bytes", "VRAM reported by the GPU."),
 		published: gauge("dri_vram_published_bytes", "VRAM offered to the scheduler."),
 		allocated: gauge("dri_vram_allocated_bytes", "VRAM promised to prepared claims."),
+		claimUsed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "dri_claim_vram_used_bytes",
+			Help: "VRAM a pod actually uses on a device it claimed (DRM fdinfo); compare to its claim.",
+		}, []string{"device", "namespace", "pod"}),
+		claimClaimed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "dri_claim_vram_bytes",
+			Help: "VRAM a pod's claim promised on a device.",
+		}, []string{"device", "namespace", "pod"}),
 		stats: map[vram.Stat]*prometheus.GaugeVec{
 			vram.VRAMUsed:    gauge("dri_vram_used_bytes", "VRAM in use according to the kernel driver."),
 			vram.GTTUsed:     gauge("dri_gtt_used_bytes", "System RAM mapped for the GPU (GTT); grows when VRAM is evicted to RAM."),
@@ -43,7 +52,7 @@ func New() *Metrics {
 		PrepareErrors:   prometheus.NewCounter(prometheus.CounterOpts{Name: "dri_prepare_errors_total", Help: "Failed claim preparations."}),
 		DiscoveryErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "dri_discovery_errors_total", Help: "Failed GPU scans."}),
 	}
-	m.reg.MustRegister(m.total, m.published, m.allocated, m.claims, m.skipped, m.PrepareErrors, m.DiscoveryErrors)
+	m.reg.MustRegister(m.total, m.published, m.allocated, m.claimUsed, m.claimClaimed, m.claims, m.skipped, m.PrepareErrors, m.DiscoveryErrors)
 	for _, g := range m.stats {
 		m.reg.MustRegister(g)
 	}
@@ -55,8 +64,8 @@ func (m *Metrics) Registry() *prometheus.Registry { return m.reg }
 
 // Update replaces the per-GPU series with the current state. A reading the
 // backend cannot take leaves its series out.
-func (m *Metrics) Update(pubs []devices.Published, allocated map[string]int64, stats func(sysfs.GPU) vram.Stats, claims int) {
-	for _, g := range []*prometheus.GaugeVec{m.total, m.published, m.allocated} {
+func (m *Metrics) Update(pubs []devices.Published, allocated map[string]int64, stats func(sysfs.GPU) vram.Stats, claims int, claimVRAM []ClaimVRAM) {
+	for _, g := range []*prometheus.GaugeVec{m.total, m.published, m.allocated, m.claimUsed, m.claimClaimed} {
 		g.Reset()
 	}
 	for _, g := range m.stats {
@@ -72,6 +81,11 @@ func (m *Metrics) Update(pubs []devices.Published, allocated map[string]int64, s
 				g.With(l).Set(v)
 			}
 		}
+	}
+	for _, c := range claimVRAM {
+		l := prometheus.Labels{"device": c.Device, "namespace": c.Namespace, "pod": c.Pod}
+		m.claimUsed.With(l).Set(float64(c.UsedBytes))
+		m.claimClaimed.With(l).Set(float64(c.ClaimedBytes))
 	}
 	m.claims.Set(float64(claims))
 }

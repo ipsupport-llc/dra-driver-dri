@@ -48,6 +48,15 @@ func (p *Preparer) Prepare(claim *resourceapi.ResourceClaim) ([]kubeletplugin.De
 	if claim.Status.Allocation == nil {
 		return nil, fmt.Errorf("claim %s/%s is not allocated", claim.Namespace, claim.Name)
 	}
+	// The pod the claim is reserved for (same namespace as the claim), for
+	// per-pod VRAM attribution. Empty when not yet reserved.
+	var podUID, podName string
+	for _, ref := range claim.Status.ReservedFor {
+		if ref.Resource == "pods" {
+			podUID, podName = string(ref.UID), ref.Name
+			break
+		}
+	}
 	var recs []state.Device
 	for _, r := range claim.Status.Allocation.Devices.Results {
 		if r.Driver != p.DriverName {
@@ -65,7 +74,8 @@ func (p *Preparer) Prepare(claim *resourceapi.ResourceClaim) ([]kubeletplugin.De
 		if r.ShareID != nil {
 			share = string(*r.ShareID)
 		}
-		rec := state.Device{Request: r.Request, Pool: r.Pool, Device: r.Device, ShareID: share, VRAMBytes: vram}
+		rec := state.Device{Request: r.Request, Pool: r.Pool, Device: r.Device, ShareID: share, VRAMBytes: vram,
+			PodUID: podUID, PodNamespace: claim.Namespace, PodName: podName}
 		rec.CDIDeviceIDs = []string{p.CDI.QualifiedID(uid, edit(rec, pub))}
 		recs = append(recs, rec)
 	}
@@ -111,6 +121,30 @@ func (p *Preparer) Allocated() map[string]int64 {
 // Count is the number of prepared claims.
 func (p *Preparer) Count() int {
 	return len(p.Store.All())
+}
+
+// ClaimPod ties a prepared device to the pod that claimed it, with the VRAM
+// the claim promised.
+type ClaimPod struct {
+	Device       string
+	PodUID       string
+	PodNamespace string
+	PodName      string
+	ClaimedBytes int64
+}
+
+// ClaimPods lists the pod behind every prepared device whose pod is known.
+func (p *Preparer) ClaimPods() []ClaimPod {
+	var out []ClaimPod
+	for _, recs := range p.Store.All() {
+		for _, r := range recs {
+			if r.PodUID == "" {
+				continue
+			}
+			out = append(out, ClaimPod{Device: r.Device, PodUID: r.PodUID, PodNamespace: r.PodNamespace, PodName: r.PodName, ClaimedBytes: r.VRAMBytes})
+		}
+	}
+	return out
 }
 
 func edit(r state.Device, pub devices.Published) cdi.Edit {

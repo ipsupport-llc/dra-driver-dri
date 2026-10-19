@@ -19,7 +19,7 @@ func TestUpdate(t *testing.T) {
 	stats := func(sysfs.GPU) vram.Stats {
 		return vram.Stats{vram.VRAMUsed: 1000, vram.GTTUsed: 2000, vram.Temperature: 49, vram.CoreClock: 850e6, vram.MemoryClock: 1370e6}
 	}
-	m.Update(pubs, map[string]int64{"pci-0000-06-00-0": 2147483648}, stats, 1)
+	m.Update(pubs, map[string]int64{"pci-0000-06-00-0": 2147483648}, stats, 1, nil)
 	m.SetSkipped(2)
 	m.PrepareErrors.Inc()
 
@@ -66,7 +66,7 @@ dri_vram_used_bytes{device="pci-0000-06-00-0",pci_bus_id="0000:06:00.0",vendor="
 	}
 
 	// A GPU that disappears drops out of the gauges.
-	m.Update(nil, nil, stats, 0)
+	m.Update(nil, nil, stats, 0, nil)
 	for _, name := range []string{"dri_vram_total_bytes", "dri_gtt_used_bytes", "dri_gpu_temperature_celsius"} {
 		if n, err := testutil.GatherAndCount(m.Registry(), name); err != nil || n != 0 {
 			t.Fatalf("stale %s series: %d, %v", name, n, err)
@@ -78,7 +78,7 @@ func TestUpdateUnknownReadings(t *testing.T) {
 	m := metrics.New()
 	pubs := []devices.Published{{Name: "pci-0000-03-00-0", Vendor: "intel", VRAMTotal: 1 << 34, VRAMPublished: 1 << 34,
 		GPU: sysfs.GPU{PCIAddress: "0000:03:00.0", KernelDriver: "xe"}}}
-	m.Update(pubs, nil, func(sysfs.GPU) vram.Stats { return vram.Stats{} }, 0)
+	m.Update(pubs, nil, func(sysfs.GPU) vram.Stats { return vram.Stats{} }, 0, nil)
 	// A reading the backend cannot take is absent, not zero.
 	for _, name := range []string{"dri_vram_used_bytes", "dri_gtt_used_bytes", "dri_gpu_temperature_celsius", "dri_gpu_core_clock_hertz", "dri_gpu_memory_clock_hertz"} {
 		if n, err := testutil.GatherAndCount(m.Registry(), name); err != nil || n != 0 {

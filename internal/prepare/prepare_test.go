@@ -93,6 +93,25 @@ func readSpec(t *testing.T, path string) string {
 	return string(b)
 }
 
+func TestPrepareRecordsClaimingPod(t *testing.T) {
+	e := newEnv(t)
+	c := claim("u1", result("pci-0000-06-00-0", "", 0))
+	c.Status.ReservedFor = []resourceapi.ResourceClaimConsumerReference{
+		{Resource: "pods", Name: "frog-0", UID: types.UID("pod-uid-a")},
+	}
+	if _, err := e.p.Prepare(c); err != nil {
+		t.Fatal(err)
+	}
+	cps := e.p.ClaimPods()
+	if len(cps) != 1 {
+		t.Fatalf("ClaimPods = %+v", cps)
+	}
+	cp := cps[0]
+	if cp.Device != "pci-0000-06-00-0" || cp.PodUID != "pod-uid-a" || cp.PodNamespace != "ns" || cp.PodName != "frog-0" {
+		t.Fatalf("ClaimPod = %+v", cp)
+	}
+}
+
 func TestPrepareWholeGPU(t *testing.T) {
 	e := newEnv(t)
 	got, err := e.p.Prepare(claim("u1", result("pci-0000-06-00-0", "", 0)))
