@@ -98,3 +98,27 @@ func TestScanPodUIDCgroupfs(t *testing.T) {
 		t.Fatalf("PodUID = %q; want %q", got[0].PodUID, want)
 	}
 }
+
+// Two fds of one DRM client (the same drm-client-id on the same device, e.g.
+// a dup'ed fd as RADV holds) are one client: its memory counts once. A second
+// client of the same process on the same GPU adds up.
+func TestScanCountsEachDRMClientOnce(t *testing.T) {
+	root := t.TempDir()
+	clientB := `drm-driver:	amdgpu
+drm-pdev:	0000:06:00.0
+drm-client-id:	43
+drm-memory-vram:	1024 KiB
+`
+	writeProc(t, root, 1234, "", map[string]string{"3": amdgpuFdinfo, "4": amdgpuFdinfo, "5": clientB})
+
+	got, err := procvram.Scan(filepath.Join(root, "proc"))
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d usages, want 1: %+v", len(got), got)
+	}
+	if want := int64(524288+1024) * 1024; got[0].VRAMBytes != want {
+		t.Fatalf("VRAMBytes = %d, want %d (client 42 once + client 43)", got[0].VRAMBytes, want)
+	}
+}
