@@ -28,6 +28,11 @@ type Usage struct {
 // Scan reads every process's DRM fdinfo under procRoot and returns its amdgpu
 // VRAM use per GPU. A process with no GPU fd is omitted. Unreadable processes
 // (gone, or not permitted) are skipped rather than failing the scan.
+//
+// Each DRM client counts once: fds with the same drm-client-id on the same
+// device are one client (dup'ed or inherited fds; RADV keeps more than one),
+// as the kernel's DRM fdinfo spec requires. An fd without a client id
+// counts on its own.
 func Scan(procRoot string) ([]Usage, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
@@ -40,6 +45,8 @@ func Scan(procRoot string) ([]Usage, error) {
 	}
 	sum := map[key]int64{}
 	var order []key
+	type client struct{ pci, id string }
+	counted := map[client]bool{}
 
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
@@ -52,9 +59,16 @@ func Scan(procRoot string) ([]Usage, error) {
 			continue
 		}
 		for _, fd := range fds {
-			pci, vram, ok := parseFdinfo(filepath.Join(fdinfoDir, fd.Name()))
+			pci, clientID, vram, ok := parseFdinfo(filepath.Join(fdinfoDir, fd.Name()))
 			if !ok {
 				continue
+			}
+			if clientID != "" {
+				c := client{pci, clientID}
+				if counted[c] {
+					continue
+				}
+				counted[c] = true
 			}
 			k := key{pid, pci}
 			if _, seen := sum[k]; !seen {
@@ -92,12 +106,13 @@ func podUID(procRoot string, pid int) string {
 	return strings.ReplaceAll(string(m[1]), "_", "-")
 }
 
-// parseFdinfo returns the GPU PCI address and VRAM bytes of one DRM fd. ok is
-// false for a non-DRM fd or one without a VRAM line.
-func parseFdinfo(path string) (pci string, vram int64, ok bool) {
+// parseFdinfo returns the GPU PCI address, DRM client id (empty when absent)
+// and VRAM bytes of one DRM fd. ok is false for a non-DRM fd or one without a
+// VRAM line.
+func parseFdinfo(path string) (pci, clientID string, vram int64, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", 0, false
+		return "", "", 0, false
 	}
 	defer func() { _ = f.Close() }()
 
@@ -113,6 +128,8 @@ func parseFdinfo(path string) (pci string, vram int64, ok bool) {
 			isDRM = true
 		case "drm-pdev":
 			pci = strings.TrimSpace(val)
+		case "drm-client-id":
+			clientID = strings.TrimSpace(val)
 		case "drm-memory-vram":
 			if b, parsed := parseMemory(strings.TrimSpace(val)); parsed {
 				vram = b
@@ -120,7 +137,7 @@ func parseFdinfo(path string) (pci string, vram int64, ok bool) {
 			}
 		}
 	}
-	return pci, vram, isDRM && hasVRAM && pci != ""
+	return pci, clientID, vram, isDRM && hasVRAM && pci != ""
 }
 
 // parseMemory parses a DRM fdinfo memory value like "524288 KiB".
