@@ -156,3 +156,24 @@ func TestScanNoClaimsReadsNothing(t *testing.T) {
 		t.Fatalf("Scan: %v, %+v; want no usages", err, got)
 	}
 }
+
+// The pod's pause (sandbox) process shares the pod cgroup but runs without
+// an AppArmor profile, so reading its fdinfo is denied and logged; it never
+// holds a GPU fd. It is skipped by its name, which reads without a ptrace
+// check.
+func TestScanSkipsPauseProcess(t *testing.T) {
+	root := t.TempDir()
+	proc := filepath.Join(root, "proc")
+	writeProc(t, root, 1000, systemdCgroup, map[string]string{"3": amdgpuFdinfo})
+	mustWrite(t, filepath.Join(proc, "1000", "comm"), "pause\n")
+	writeProc(t, root, 1234, systemdCgroup, map[string]string{"3": amdgpuFdinfo})
+	mustWrite(t, filepath.Join(proc, "1234", "comm"), "llama-server\n")
+
+	got, err := procvram.Scan(proc, claimed)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got) != 1 || got[0].PID != 1234 {
+		t.Fatalf("got %+v; want only PID 1234 (1000 is pause)", got)
+	}
+}

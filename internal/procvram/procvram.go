@@ -32,7 +32,10 @@ type Usage struct {
 //
 // Other processes are skipped by their cgroup before their fdinfo is opened:
 // listing another process's fdinfo is a ptrace read, and AppArmor denies and
-// logs it for every host process and privileged pod on each scan.
+// logs it for every host process and privileged pod on each scan. A claimed
+// pod's pause (sandbox) process is skipped too: it runs without an AppArmor
+// profile and never holds a GPU fd. Reading cgroup and comm is not a ptrace
+// read (unlike attr/current, whose open runs the ptrace check).
 //
 // Each DRM client counts once: fds with the same drm-client-id on the same
 // device are one client (dup'ed or inherited fds; RADV keeps more than one),
@@ -61,6 +64,9 @@ func Scan(procRoot string, pods map[string]bool) ([]Usage, error) {
 		}
 		uid := podUID(procRoot, pid)
 		if !pods[uid] {
+			continue
+		}
+		if isPause(procRoot, e.Name()) {
 			continue
 		}
 		uids[pid] = uid
@@ -109,6 +115,12 @@ func podUID(procRoot string, pid int) string {
 		return ""
 	}
 	return strings.ReplaceAll(string(m[1]), "_", "-")
+}
+
+// isPause reports whether a process is a pod's sandbox ("pause") process.
+func isPause(procRoot, pid string) bool {
+	b, err := os.ReadFile(filepath.Join(procRoot, pid, "comm"))
+	return err == nil && strings.TrimSpace(string(b)) == "pause"
 }
 
 // parseFdinfo returns the GPU PCI address, DRM client id (empty when absent)
