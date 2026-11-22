@@ -25,15 +25,20 @@ type Usage struct {
 	VRAMBytes int64
 }
 
-// Scan reads every process's DRM fdinfo under procRoot and returns its amdgpu
-// VRAM use per GPU. A process with no GPU fd is omitted. Unreadable processes
-// (gone, or not permitted) are skipped rather than failing the scan.
+// Scan reads the DRM fdinfo of the processes in the given pods (by pod UID)
+// under procRoot and returns their amdgpu VRAM use per GPU. A process with no
+// GPU fd is omitted. Unreadable processes (gone, or not permitted) are skipped
+// rather than failing the scan.
+//
+// Other processes are skipped by their cgroup before their fdinfo is opened:
+// listing another process's fdinfo is a ptrace read, and AppArmor denies and
+// logs it for every host process and privileged pod on each scan.
 //
 // Each DRM client counts once: fds with the same drm-client-id on the same
 // device are one client (dup'ed or inherited fds; RADV keeps more than one),
 // as the kernel's DRM fdinfo spec requires. An fd without a client id
 // counts on its own.
-func Scan(procRoot string) ([]Usage, error) {
+func Scan(procRoot string, pods map[string]bool) ([]Usage, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, err
@@ -47,12 +52,18 @@ func Scan(procRoot string) ([]Usage, error) {
 	var order []key
 	type client struct{ pci, id string }
 	counted := map[client]bool{}
+	uids := map[int]string{}
 
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue // not a PID directory
 		}
+		uid := podUID(procRoot, pid)
+		if !pods[uid] {
+			continue
+		}
+		uids[pid] = uid
 		fdinfoDir := filepath.Join(procRoot, e.Name(), "fdinfo")
 		fds, err := os.ReadDir(fdinfoDir)
 		if err != nil {
@@ -78,15 +89,9 @@ func Scan(procRoot string) ([]Usage, error) {
 		}
 	}
 
-	uidCache := map[int]string{}
 	out := make([]Usage, 0, len(order))
 	for _, k := range order {
-		uid, ok := uidCache[k.pid]
-		if !ok {
-			uid = podUID(procRoot, k.pid)
-			uidCache[k.pid] = uid
-		}
-		out = append(out, Usage{PID: k.pid, PCI: k.pci, PodUID: uid, VRAMBytes: sum[k]})
+		out = append(out, Usage{PID: k.pid, PCI: k.pci, PodUID: uids[k.pid], VRAMBytes: sum[k]})
 	}
 	return out, nil
 }
