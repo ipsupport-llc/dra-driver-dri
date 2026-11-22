@@ -124,10 +124,16 @@ func (d *Driver) Inventory() map[string]devices.Published {
 func (d *Driver) refreshMetrics() {
 	pubs := slices.Collect(maps.Values(d.Inventory()))
 	// Per-pod VRAM from DRM fdinfo (the DaemonSet runs with hostPID, so /proc
-	// shows every process). A scan error leaves the per-pod series empty for
-	// this cycle rather than dropping the GPU gauges.
-	usages, _ := procvram.Scan("/proc")
-	claimVRAM := metrics.Attribute(d.prep.ClaimPods(), pubs, usages)
+	// shows every process); only the pods holding a claim are read. A scan
+	// error leaves the per-pod series empty for this cycle rather than
+	// dropping the GPU gauges.
+	claims := d.prep.ClaimPods()
+	pods := make(map[string]bool, len(claims))
+	for _, c := range claims {
+		pods[c.PodUID] = true
+	}
+	usages, _ := procvram.Scan("/proc", pods)
+	claimVRAM := metrics.Attribute(claims, pubs, usages)
 	d.metrics.Update(pubs, d.prep.Allocated(), d.det.Stats, d.prep.Count(), claimVRAM)
 }
 

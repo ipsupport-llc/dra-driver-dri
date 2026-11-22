@@ -45,14 +45,24 @@ drm-memory-gtt:	1024 KiB
 drm-memory-vram:	524288 KiB
 `
 
+// systemd cgroup driver (k3s default): the pod UID is in a `*-pod<uid>.slice`
+// segment with underscores instead of dashes.
+const systemdCgroup = "0::/kubepods.slice/kubepods-besteffort.slice/" +
+	"kubepods-besteffort-pod3b2ef00d_1a2b_4c3d_8e9f_0011aabbccdd.slice/" +
+	"cri-containerd-deadbeef.scope\n"
+
+const claimedUID = "3b2ef00d-1a2b-4c3d-8e9f-0011aabbccdd"
+
+var claimed = map[string]bool{claimedUID: true}
+
 func TestScanReadsAmdgpuVRAMPerProcess(t *testing.T) {
 	root := t.TempDir()
 	// A GPU process on PCI 0000:06:00.0 using 512 MiB VRAM.
-	writeProc(t, root, 1234, "", map[string]string{"3": amdgpuFdinfo})
+	writeProc(t, root, 1234, systemdCgroup, map[string]string{"3": amdgpuFdinfo})
 	// A process with a non-DRM fd — ignored.
-	writeProc(t, root, 5678, "", map[string]string{"7": "pos:\t0\nflags:\t0\n"})
+	writeProc(t, root, 5678, systemdCgroup, map[string]string{"7": "pos:\t0\nflags:\t0\n"})
 
-	got, err := procvram.Scan(filepath.Join(root, "proc"))
+	got, err := procvram.Scan(filepath.Join(root, "proc"), claimed)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -65,17 +75,11 @@ func TestScanReadsAmdgpuVRAMPerProcess(t *testing.T) {
 	}
 }
 
-// systemd cgroup driver (k3s default): the pod UID is in a `*-pod<uid>.slice`
-// segment with underscores instead of dashes.
-const systemdCgroup = "0::/kubepods.slice/kubepods-besteffort.slice/" +
-	"kubepods-besteffort-pod3b2ef00d_1a2b_4c3d_8e9f_0011aabbccdd.slice/" +
-	"cri-containerd-deadbeef.scope\n"
-
 func TestScanMapsProcessToPodUID(t *testing.T) {
 	root := t.TempDir()
 	writeProc(t, root, 1234, systemdCgroup, map[string]string{"3": amdgpuFdinfo})
 
-	got, err := procvram.Scan(filepath.Join(root, "proc"))
+	got, err := procvram.Scan(filepath.Join(root, "proc"), claimed)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("Scan: %v, %+v", err, got)
 	}
@@ -90,7 +94,7 @@ func TestScanPodUIDCgroupfs(t *testing.T) {
 	cg := "0::/kubepods/besteffort/pod3b2ef00d-1a2b-4c3d-8e9f-0011aabbccdd/deadbeef\n"
 	writeProc(t, root, 1234, cg, map[string]string{"3": amdgpuFdinfo})
 
-	got, err := procvram.Scan(filepath.Join(root, "proc"))
+	got, err := procvram.Scan(filepath.Join(root, "proc"), claimed)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("Scan: %v, %+v", err, got)
 	}
@@ -109,9 +113,9 @@ drm-pdev:	0000:06:00.0
 drm-client-id:	43
 drm-memory-vram:	1024 KiB
 `
-	writeProc(t, root, 1234, "", map[string]string{"3": amdgpuFdinfo, "4": amdgpuFdinfo, "5": clientB})
+	writeProc(t, root, 1234, systemdCgroup, map[string]string{"3": amdgpuFdinfo, "4": amdgpuFdinfo, "5": clientB})
 
-	got, err := procvram.Scan(filepath.Join(root, "proc"))
+	got, err := procvram.Scan(filepath.Join(root, "proc"), claimed)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -120,5 +124,35 @@ drm-memory-vram:	1024 KiB
 	}
 	if want := int64(524288+1024) * 1024; got[0].VRAMBytes != want {
 		t.Fatalf("VRAMBytes = %d, want %d (client 42 once + client 43)", got[0].VRAMBytes, want)
+	}
+}
+
+// Only processes of pods that hold a claim are read. A host process or a pod
+// without a claim is skipped before its fdinfo is opened: reading another
+// process's fdinfo is a ptrace read, which AppArmor denies (and logs) for
+// unconfined peers.
+func TestScanReadsOnlyClaimedPods(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, 1234, systemdCgroup, map[string]string{"3": amdgpuFdinfo})
+	writeProc(t, root, 2000, "", map[string]string{"3": amdgpuFdinfo})
+	other := "0::/kubepods/besteffort/pod99999999-0000-0000-0000-000000000000/cafe\n"
+	writeProc(t, root, 3000, other, map[string]string{"3": amdgpuFdinfo})
+
+	got, err := procvram.Scan(filepath.Join(root, "proc"), claimed)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got) != 1 || got[0].PID != 1234 || got[0].PodUID != claimedUID {
+		t.Fatalf("got %+v; want only PID 1234 of the claimed pod", got)
+	}
+}
+
+func TestScanNoClaimsReadsNothing(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, 1234, systemdCgroup, map[string]string{"3": amdgpuFdinfo})
+
+	got, err := procvram.Scan(filepath.Join(root, "proc"), nil)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("Scan: %v, %+v; want no usages", err, got)
 	}
 }
