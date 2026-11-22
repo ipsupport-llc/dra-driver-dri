@@ -118,6 +118,9 @@ func podUID(procRoot string, pid int) string {
 }
 
 // isPause reports whether a process is a pod's sandbox ("pause") process.
+// By name only: a GPU workload process named exactly "pause" (comm is
+// settable) would go uncounted. Acceptable for metrics; the cgroup does not
+// tell the sandbox from the pod's containers.
 func isPause(procRoot, pid string) bool {
 	b, err := os.ReadFile(filepath.Join(procRoot, pid, "comm"))
 	return err == nil && strings.TrimSpace(string(b)) == "pause"
