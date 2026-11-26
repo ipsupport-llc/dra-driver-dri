@@ -78,11 +78,15 @@ func allocate(t *testing.T, shares int64, claims ...*resourceapi.ResourceClaim) 
 // The scheduler, not the driver, enforces shares: a claim that does not ask
 // takes the default one share, a claim can ask for more.
 func TestSharesCapClaimsPerGPU(t *testing.T) {
-	chat := func(n string) *resourceapi.ResourceClaim { return claim(n, map[resourceapi.QualifiedName]string{"vram": "4608Mi"}) }
+	chat := func(n string) *resourceapi.ResourceClaim {
+		return claim(n, map[resourceapi.QualifiedName]string{"vram": "4608Mi"})
+	}
 	embed := func(n string) *resourceapi.ResourceClaim {
 		return claim(n, map[resourceapi.QualifiedName]string{"vram": "1Gi", "shares": "2"})
 	}
-	small := func(n string) *resourceapi.ResourceClaim { return claim(n, map[resourceapi.QualifiedName]string{"vram": "1Gi"}) }
+	small := func(n string) *resourceapi.ResourceClaim {
+		return claim(n, map[resourceapi.QualifiedName]string{"vram": "1Gi"})
+	}
 	cases := []struct {
 		name   string
 		shares int64
