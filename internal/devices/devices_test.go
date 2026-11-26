@@ -115,6 +115,12 @@ func TestResourcesShares(t *testing.T) {
 	if v, ok := d.Capacity[devices.CapacityVRAM]; !ok || v.Value.Value() != 5888*mib {
 		t.Fatalf("vram capacity = %+v", d.Capacity)
 	}
+	// The API wants min + step <= value: one share has no step.
+	c.Shares = 1
+	r := devices.Resources(c, pubs).Pools["node-a"].Slices[0].Devices[0].Capacity[devices.CapacityShares].RequestPolicy.ValidRange
+	if r.Step != nil || r.Min.Value() != 1 || r.Max.Value() != 1 {
+		t.Fatalf("one-share range = %+v", r)
+	}
 }
 
 func TestResourcesNoGPUs(t *testing.T) {

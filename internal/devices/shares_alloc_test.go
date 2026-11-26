@@ -43,8 +43,9 @@ func claim(name string, requests map[resourceapi.QualifiedName]string) *resource
 }
 
 // allocate runs the scheduler's allocator for claims on one node with one
-// 6080Mi GPU published with shares, and reports whether all of them fit.
-func allocate(t *testing.T, shares int64, claims ...*resourceapi.ResourceClaim) bool {
+// 6080Mi GPU published with shares. It returns the allocations when all of
+// the claims fit, nil when they do not, and fails on any allocator error.
+func allocate(t *testing.T, shares int64, claims ...*resourceapi.ResourceClaim) []resourceapi.AllocationResult {
 	t.Helper()
 	c := cfg()
 	c.Shares = shares
@@ -72,7 +73,13 @@ func allocate(t *testing.T, shares int64, claims ...*resourceapi.ResourceClaim) 
 	}
 	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: c.NodeName}}
 	results, err := a.Allocate(context.Background(), node, claims)
-	return err == nil && len(results) == len(claims)
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	if len(results) != 0 && len(results) != len(claims) {
+		t.Fatalf("%d results for %d claims", len(results), len(claims))
+	}
+	return results
 }
 
 // The scheduler, not the driver, enforces shares: a claim that does not ask
@@ -98,13 +105,55 @@ func TestSharesCapClaimsPerGPU(t *testing.T) {
 		{"three small claims fit three shares", 3, []*resourceapi.ResourceClaim{small("s1"), small("s2"), small("s3")}, true},
 		{"a fourth does not", 3, []*resourceapi.ResourceClaim{small("s1"), small("s2"), small("s3"), small("s4")}, false},
 		{"without shares only VRAM counts", 0, []*resourceapi.ResourceClaim{small("s1"), small("s2"), small("s3"), small("s4")}, true},
-		{"a whole-GPU claim takes one share and all VRAM", 3, []*resourceapi.ResourceClaim{claim("w", nil), small("s")}, false},
+		{"a whole-GPU claim blocks a small one", 3, []*resourceapi.ResourceClaim{claim("w", nil), small("s")}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := allocate(t, tc.shares, tc.claims...); got != tc.fit {
+			if got := allocate(t, tc.shares, tc.claims...) != nil; got != tc.fit {
 				t.Fatalf("fit = %v, want %v", got, tc.fit)
 			}
 		})
+	}
+}
+
+// What one claim consumes: the defaults of the capacities it does not ask for.
+func TestSharesConsumedByOneClaim(t *testing.T) {
+	cases := []struct {
+		name         string
+		claim        *resourceapi.ResourceClaim
+		vram, shares string
+	}{
+		{"whole GPU", claim("w", nil), "6080Mi", "1"},
+		{"vram only", claim("v", map[resourceapi.QualifiedName]string{"vram": "1Gi"}), "1Gi", "1"},
+		{"vram and shares", claim("e", map[resourceapi.QualifiedName]string{"vram": "1Gi", "shares": "2"}), "1Gi", "2"},
+		{"shares only: all the VRAM", claim("s", map[resourceapi.QualifiedName]string{"shares": "2"}), "6080Mi", "2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := allocate(t, 3, tc.claim)
+			if res == nil {
+				t.Fatal("does not fit alone")
+			}
+			got := res[0].Devices.Results[0].ConsumedCapacity
+			if v := got[devices.CapacityVRAM]; v.Cmp(resource.MustParse(tc.vram)) != 0 {
+				t.Errorf("vram = %s, want %s", v.String(), tc.vram)
+			}
+			if s := got[devices.CapacityShares]; s.Cmp(resource.MustParse(tc.shares)) != 0 {
+				t.Errorf("shares = %s, want %s", s.String(), tc.shares)
+			}
+		})
+	}
+}
+
+// One share per GPU: one claim of any kind per GPU.
+func TestOneSharePerGPU(t *testing.T) {
+	small := func(n string) *resourceapi.ResourceClaim {
+		return claim(n, map[resourceapi.QualifiedName]string{"vram": "1Gi"})
+	}
+	if allocate(t, 1, small("a")) == nil {
+		t.Fatal("one claim does not fit")
+	}
+	if allocate(t, 1, small("a"), small("b")) != nil {
+		t.Fatal("two claims fit one share")
 	}
 }

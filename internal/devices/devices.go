@@ -154,13 +154,16 @@ func Resources(cfg Config, pubs []Published) resourceslice.DriverResources {
 // sharesCapacity is n shares, one taken by a claim that does not ask.
 func sharesCapacity(n int64) resourceapi.DeviceCapacity {
 	one := *resource.NewQuantity(1, resource.DecimalSI)
-	minQ, stepQ := one.DeepCopy(), one.DeepCopy()
+	minQ := one.DeepCopy()
 	maxQ := *resource.NewQuantity(n, resource.DecimalSI)
+	r := &resourceapi.CapacityRequestPolicyRange{Min: &minQ, Max: &maxQ}
+	// The API wants min + step <= value; with one share there is no step.
+	if n > 1 {
+		stepQ := one.DeepCopy()
+		r.Step = &stepQ
+	}
 	return resourceapi.DeviceCapacity{
-		Value: maxQ.DeepCopy(),
-		RequestPolicy: &resourceapi.CapacityRequestPolicy{
-			Default:    &one,
-			ValidRange: &resourceapi.CapacityRequestPolicyRange{Min: &minQ, Step: &stepQ, Max: &maxQ},
-		},
+		Value:         maxQ.DeepCopy(),
+		RequestPolicy: &resourceapi.CapacityRequestPolicy{Default: &one, ValidRange: r},
 	}
 }

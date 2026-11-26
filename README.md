@@ -296,9 +296,21 @@ do not, so their replicas spread one per GPU:
                 shares: "2"
 ```
 
-The scheduler enforces it, so it holds when many pods start at once. A claim
-that asks for `shares` cannot be allocated on a driver started without
-`--device-shares`: set the flag before such claims exist.
+The scheduler enforces it, so it holds when many pods start at once. Keep in
+mind:
+
+- Pair `shares` with `vram`. A claim takes the default of every capacity it
+  does not name, so `shares` alone also takes the whole GPU's VRAM.
+- Shares are counted per claim: give each pod its own claim (a
+  ResourceClaimTemplate), as for VRAM.
+- A claim that asks for `shares` cannot be allocated on a driver started
+  without `--device-shares`: set the flag before such claims exist.
+- The cap counts only claims allocated after the flag is set. A claim records
+  what it consumed when it was allocated, so claims from before count as no
+  shares, and lowering N or removing the flag evicts nothing. Restart the pods
+  that hold older claims to bring them under the cap.
+- Replicas spread one per GPU only while a GPU has room; with none left the
+  next one stays Pending.
 
 ### Only some GPUs (vendor, model)
 
@@ -373,7 +385,7 @@ pod that references it lands on the same GPU and shares that one VRAM amount.
 |---|---|---|
 | `--driver-name` / `DRIVER_NAME` | — | DRA driver name and DeviceClass name |
 | `--vram-reserve` / `VRAM_RESERVE` | `256Mi` | VRAM held back per GPU for the kernel driver |
-| `--device-shares` / `DEVICE_SHARES` | `0` | publish a `shares` capacity of this many per GPU; a claim takes one unless it asks for more (see At most N pods per GPU); `0` publishes none |
+| `--device-shares` / `DEVICE_SHARES` | `0` | publish a `shares` capacity of this many per GPU; a claim takes one unless it asks for more; counts claims allocated after it is set (see At most N pods per GPU); `0` publishes none |
 | `--rescan-interval` / `RESCAN_INTERVAL` | `30s` | how often GPUs are rescanned |
 | `--overrides` / `OVERRIDES` | — | YAML of VRAM per PCI address, for GPUs without a backend |
 | `--metrics-addr` / `METRICS_ADDR` | `:8080` | Prometheus endpoint |
