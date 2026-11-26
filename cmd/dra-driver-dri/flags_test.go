@@ -15,7 +15,7 @@ func TestParseFlagsDefaultsFromEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.DriverName != "gpu.example.com" || f.NodeName != "node-a" || f.PodUID != "pod-1" ||
-		f.ReserveBytes != 256<<20 || f.RescanInterval != 30*time.Second || f.MetricsAddr != ":8080" ||
+		f.ReserveBytes != 256<<20 || f.DeviceShares != 0 || f.RescanInterval != 30*time.Second || f.MetricsAddr != ":8080" ||
 		f.SysRoot != "/sys" || f.CDIRoot != "/var/run/cdi" ||
 		f.RegistrarDir != "/var/lib/kubelet/plugins_registry" || f.PluginsDir != "/var/lib/kubelet/plugins" {
 		t.Fatalf("flags = %+v", f)
@@ -23,12 +23,12 @@ func TestParseFlagsDefaultsFromEnv(t *testing.T) {
 }
 
 func TestParseFlagsOverrideEnv(t *testing.T) {
-	f, err := parseFlags([]string{"--vram-reserve=512Mi", "--rescan-interval=10s"},
-		env(map[string]string{"DRIVER_NAME": "gpu.example.com", "NODE_NAME": "node-a", "VRAM_RESERVE": "1Gi"}))
+	f, err := parseFlags([]string{"--vram-reserve=512Mi", "--rescan-interval=10s", "--device-shares=3"},
+		env(map[string]string{"DRIVER_NAME": "gpu.example.com", "NODE_NAME": "node-a", "VRAM_RESERVE": "1Gi", "DEVICE_SHARES": "2"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.ReserveBytes != 512<<20 || f.RescanInterval != 10*time.Second {
+	if f.ReserveBytes != 512<<20 || f.RescanInterval != 10*time.Second || f.DeviceShares != 3 {
 		t.Fatalf("flags = %+v", f)
 	}
 }
@@ -45,6 +45,8 @@ func TestParseFlagsErrors(t *testing.T) {
 		"bad reserve":      {[]string{"--vram-reserve=lots"}, base},
 		"negative reserve": {[]string{"--vram-reserve=-1Mi"}, base},
 		"too-fast rescan":  {[]string{"--rescan-interval=100ms"}, base},
+		"negative shares":  {[]string{"--device-shares=-1"}, base},
+		"bad shares":       {[]string{"--device-shares=two"}, base},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

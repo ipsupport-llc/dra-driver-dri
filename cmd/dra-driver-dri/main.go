@@ -70,7 +70,7 @@ func run() error {
 	}
 
 	m := metrics.New()
-	d := newDriver(devices.Config{NodeName: f.NodeName, ReserveBytes: f.ReserveBytes}, f.SysRoot, vram.NewDetector(overrides), m, cancel)
+	d := newDriver(devices.Config{NodeName: f.NodeName, ReserveBytes: f.ReserveBytes, Shares: f.DeviceShares}, f.SysRoot, vram.NewDetector(overrides), m, cancel)
 	d.prep = &prepare.Preparer{DriverName: f.DriverName, Inventory: d.Inventory, CDI: writer, Store: store}
 	if err := d.Refresh(ctx); err != nil {
 		return err
