@@ -95,6 +95,28 @@ func TestResources(t *testing.T) {
 	}
 }
 
+func TestResourcesShares(t *testing.T) {
+	pubs := []devices.Published{{Name: "pci-0000-06-00-0", GPU: gpu("0000:06:00.0", "renderD128"), Vendor: "amd", VRAMTotal: 6144 * mib, VRAMPublished: 5888 * mib}}
+	if _, ok := devices.Resources(cfg(), pubs).Pools["node-a"].Slices[0].Devices[0].Capacity[devices.CapacityShares]; ok {
+		t.Fatal("shares published without Shares set")
+	}
+	c := cfg()
+	c.Shares = 3
+	d := devices.Resources(c, pubs).Pools["node-a"].Slices[0].Devices[0]
+	s, ok := d.Capacity[devices.CapacityShares]
+	if !ok || s.Value.Value() != 3 {
+		t.Fatalf("capacity = %+v", d.Capacity)
+	}
+	p := s.RequestPolicy
+	if p == nil || p.Default.Value() != 1 || p.ValidRange == nil ||
+		p.ValidRange.Min.Value() != 1 || p.ValidRange.Step.Value() != 1 || p.ValidRange.Max.Value() != 3 {
+		t.Fatalf("request policy = %+v", p)
+	}
+	if v, ok := d.Capacity[devices.CapacityVRAM]; !ok || v.Value.Value() != 5888*mib {
+		t.Fatalf("vram capacity = %+v", d.Capacity)
+	}
+}
+
 func TestResourcesNoGPUs(t *testing.T) {
 	res := devices.Resources(cfg(), nil)
 	if pool, ok := res.Pools["node-a"]; !ok || len(pool.Slices) != 1 || len(pool.Slices[0].Devices) != 0 {

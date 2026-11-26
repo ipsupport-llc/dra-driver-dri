@@ -18,6 +18,10 @@ import (
 // CapacityVRAM is the consumable capacity a claim requests.
 const CapacityVRAM resourceapi.QualifiedName = "vram"
 
+// CapacityShares is the optional consumable capacity that caps how many
+// claims share a GPU: each claim takes one share unless it asks for more.
+const CapacityShares resourceapi.QualifiedName = "shares"
+
 // DefaultStep is the request granularity and the minimum request.
 const DefaultStep int64 = 64 << 20
 
@@ -26,6 +30,10 @@ type Config struct {
 	NodeName     string
 	ReserveBytes int64 // subtracted from each GPU's VRAM
 	StepBytes    int64 // request granularity; published VRAM is rounded down to it
+	// Shares, when positive, is published as each GPU's "shares" capacity:
+	// a claim takes one share by default, so at most Shares claims share a
+	// GPU, and a claim that asks for more shares leaves room for fewer others.
+	Shares int64
 }
 
 func (c Config) step() int64 {
@@ -107,6 +115,22 @@ func Resources(cfg Config, pubs []Published) resourceslice.DriverResources {
 		def, maxQ := value.DeepCopy(), value.DeepCopy()
 		minQ := *resource.NewQuantity(step, resource.BinarySI)
 		stepQ := minQ.DeepCopy()
+		capacity := map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
+			CapacityVRAM: {
+				Value: value,
+				RequestPolicy: &resourceapi.CapacityRequestPolicy{
+					Default: &def,
+					ValidRange: &resourceapi.CapacityRequestPolicyRange{
+						Min:  &minQ,
+						Step: &stepQ,
+						Max:  &maxQ,
+					},
+				},
+			},
+		}
+		if cfg.Shares > 0 {
+			capacity[CapacityShares] = sharesCapacity(cfg.Shares)
+		}
 		devs = append(devs, resourceapi.Device{
 			Name: p.Name,
 			Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
@@ -116,25 +140,27 @@ func Resources(cfg Config, pubs []Published) resourceslice.DriverResources {
 				"renderNode":   {StringValue: ptr.To(p.GPU.RenderNode)},
 				deviceattribute.StandardDeviceAttributePCIBusID: {StringValue: ptr.To(p.GPU.PCIAddress)},
 			},
-			Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
-				CapacityVRAM: {
-					Value: value,
-					RequestPolicy: &resourceapi.CapacityRequestPolicy{
-						Default: &def,
-						ValidRange: &resourceapi.CapacityRequestPolicyRange{
-							Min:  &minQ,
-							Step: &stepQ,
-							Max:  &maxQ,
-						},
-					},
-				},
-			},
+			Capacity:                 capacity,
 			AllowMultipleAllocations: ptr.To(true),
 		})
 	}
 	return resourceslice.DriverResources{
 		Pools: map[string]resourceslice.Pool{
 			cfg.NodeName: {Slices: []resourceslice.Slice{{Devices: devs}}},
+		},
+	}
+}
+
+// sharesCapacity is n shares, one taken by a claim that does not ask.
+func sharesCapacity(n int64) resourceapi.DeviceCapacity {
+	one := *resource.NewQuantity(1, resource.DecimalSI)
+	minQ, stepQ := one.DeepCopy(), one.DeepCopy()
+	maxQ := *resource.NewQuantity(n, resource.DecimalSI)
+	return resourceapi.DeviceCapacity{
+		Value: maxQ.DeepCopy(),
+		RequestPolicy: &resourceapi.CapacityRequestPolicy{
+			Default:    &one,
+			ValidRange: &resourceapi.CapacityRequestPolicyRange{Min: &minQ, Step: &stepQ, Max: &maxQ},
 		},
 	}
 }

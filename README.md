@@ -277,6 +277,29 @@ spec:
             deviceClassName: gpu.example.com   # no capacity → the whole GPU
 ```
 
+### At most N pods per GPU (shares)
+
+VRAM alone lets small claims pile onto one GPU, which then time-slices them
+all while the next GPU sits idle. With `--device-shares=N` every GPU also
+publishes a consumable `shares` capacity of N. A claim that does not mention
+it takes one share, so at most N claims share a GPU. A claim may ask for more
+shares to keep its own kind apart: with N = 3, a large model (default one
+share) and a small one asking for two fit together, but two of the small ones
+do not, so their replicas spread one per GPU:
+
+```yaml
+          exactly:
+            deviceClassName: gpu.example.com
+            capacity:
+              requests:
+                vram: 1Gi
+                shares: "2"
+```
+
+The scheduler enforces it, so it holds when many pods start at once. A claim
+that asks for `shares` cannot be allocated on a driver started without
+`--device-shares`: set the flag before such claims exist.
+
 ### Only some GPUs (vendor, model)
 
 ```yaml
@@ -350,6 +373,7 @@ pod that references it lands on the same GPU and shares that one VRAM amount.
 |---|---|---|
 | `--driver-name` / `DRIVER_NAME` | — | DRA driver name and DeviceClass name |
 | `--vram-reserve` / `VRAM_RESERVE` | `256Mi` | VRAM held back per GPU for the kernel driver |
+| `--device-shares` / `DEVICE_SHARES` | `0` | publish a `shares` capacity of this many per GPU; a claim takes one unless it asks for more (see At most N pods per GPU); `0` publishes none |
 | `--rescan-interval` / `RESCAN_INTERVAL` | `30s` | how often GPUs are rescanned |
 | `--overrides` / `OVERRIDES` | — | YAML of VRAM per PCI address, for GPUs without a backend |
 | `--metrics-addr` / `METRICS_ADDR` | `:8080` | Prometheus endpoint |
@@ -410,7 +434,8 @@ fits keeps ~0.3 GiB in GTT.
   not cap a process. Size workloads to `DRA_GPU_VRAM_BYTES` and watch the
   over-use alert.
 - **Placement is first-fit.** Kubernetes fills one GPU before the next; when
-  you run at most one model per GPU, claim whole GPUs (no `vram` amount).
+  you run at most one model per GPU, claim whole GPUs (no `vram` amount), or
+  cap pods per GPU with `--device-shares`.
 - **Compute is time-sliced** between pods on one GPU (generation roughly halves
   for each of two busy pods).
 - VRAM detection is built in for `amdgpu` only so far; Intel (`xe`, `i915`)
