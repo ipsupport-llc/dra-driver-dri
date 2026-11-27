@@ -14,6 +14,7 @@ import (
 
 	"github.com/ipsupport-llc/dra-driver-dri/internal/cdi"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/devices"
+	"github.com/ipsupport-llc/dra-driver-dri/internal/hang"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/metrics"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/prepare"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/state"
@@ -41,7 +42,7 @@ func testDriver(t *testing.T) (*Driver, string, string) {
 	dev := sysfstest.AddGPU(t, root, sysfstest.FakeGPU{RenderNode: "renderD128", PCIAddress: "0000:06:00.0", VendorID: "0x1002", DeviceID: "0x6798", Driver: "amdgpu",
 		Files: map[string]string{"mem_info_vram_total": "6442450944\n", "mem_info_vram_used": "0\n"}})
 	m := metrics.New()
-	d := newDriver(devices.Config{NodeName: "node-a", ReserveBytes: 256 << 20}, root, vram.NewDetector(nil), m, func(error) {})
+	d := newDriver(devices.Config{NodeName: "node-a", DriverName: "gpu.example.com", ReserveBytes: 256 << 20}, root, vram.NewDetector(nil), m, func(error) {})
 	w, err := cdi.NewWriter(filepath.Join(dir, "cdi"), "gpu.example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -156,5 +157,44 @@ func TestPrepareRescansBeforePreparing(t *testing.T) {
 	}
 	if d.prep.Count() != 0 {
 		t.Fatal("checkpoint entry written for a missing GPU")
+	}
+}
+
+func TestHangRepublishesWithTaintAndRefusesClaims(t *testing.T) {
+	d, _, _ := testDriver(t)
+	l, err := hang.OpenLatch(filepath.Join(t.TempDir(), "hung.json"), "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.latch = l
+	pub := &fakePublisher{}
+	ctx := context.Background()
+	if err := d.Rescan(ctx, pub); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(pub.calls[0].Pools["node-a"].Slices[0].Devices[0].Taints); n != 0 {
+		t.Fatalf("taints before the hang = %d", n)
+	}
+
+	// A hang record for a GPU this node does not publish changes nothing.
+	d.OnHang(ctx, "0000:0a:00.0")
+	d.OnHang(ctx, "0000:06:00.0")
+	if err := d.Rescan(ctx, pub); err != nil {
+		t.Fatal(err)
+	}
+	if len(pub.calls) != 2 {
+		t.Fatalf("publishes = %d, want 2 after a hang", len(pub.calls))
+	}
+	taints := pub.calls[1].Pools["node-a"].Slices[0].Devices[0].Taints
+	if len(taints) != 1 || taints[0].Effect != resourceapi.DeviceTaintEffectNoExecute {
+		t.Fatalf("taints after the hang = %+v", taints)
+	}
+
+	c := &resourceapi.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "c", UID: "u1"}}
+	c.Status.Allocation = &resourceapi.AllocationResult{Devices: resourceapi.DeviceAllocationResult{Results: []resourceapi.DeviceRequestAllocationResult{
+		{Request: "gpu", Driver: "gpu.example.com", Pool: "node-a", Device: "pci-0000-06-00-0"}}}}
+	res, err := d.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{c})
+	if err != nil || res["u1"].Err == nil {
+		t.Fatalf("prepare on a hung GPU: %+v, %v", res, err)
 	}
 }

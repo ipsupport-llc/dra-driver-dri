@@ -288,3 +288,31 @@ func TestTwoInstancesShareTheCheckpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareRefusesHungGPU(t *testing.T) {
+	e := newEnv(t)
+	hung := e.inv["pci-0000-06-00-0"]
+	hung.Hung = true
+	e.inv["pci-0000-06-00-0"] = hung
+	_, err := e.p.Prepare(claim("u1", result("pci-0000-06-00-0", "", 0)))
+	if err == nil || !strings.Contains(err.Error(), "hung") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(e.specs(t)) != 0 || e.p.Count() != 0 {
+		t.Fatal("a refused prepare left state behind")
+	}
+}
+
+func TestRestoreRefusesHungGPU(t *testing.T) {
+	e := newEnv(t)
+	c := claim("u1", result("pci-0000-06-00-0", "", 0))
+	if _, err := e.p.Prepare(c); err != nil {
+		t.Fatal(err)
+	}
+	hung := e.inv["pci-0000-06-00-0"]
+	hung.Hung = true
+	e.inv["pci-0000-06-00-0"] = hung
+	if _, err := e.p.Prepare(c); err == nil || !strings.Contains(err.Error(), "hung") {
+		t.Fatalf("restoring onto a hung GPU: err = %v", err)
+	}
+}

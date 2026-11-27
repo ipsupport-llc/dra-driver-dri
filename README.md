@@ -43,6 +43,9 @@ cards without ROCm support (GCN 1.0 "Tahiti", e.g. the FirePro D700 in the
   numbers. DaemonSet rolling updates do not disturb running pods.
 - **Prometheus metrics and alerts:** VRAM published, claimed and actually used
   per GPU; alerts for over-use and failed preparation.
+- **Hung GPUs are taken out:** when the kernel reports a GPU timeout, the
+  device gets a `NoExecute` taint until the node reboots, so its pods move to
+  healthy GPUs (see [Hung GPUs](#hung-gpus)).
 
 ## How it works
 
@@ -389,6 +392,7 @@ pod that references it lands on the same GPU and shares that one VRAM amount.
 | `--rescan-interval` / `RESCAN_INTERVAL` | `30s` | how often GPUs are rescanned |
 | `--overrides` / `OVERRIDES` | — | YAML of VRAM per PCI address, for GPUs without a backend |
 | `--metrics-addr` / `METRICS_ADDR` | `:8080` | Prometheus endpoint |
+| `--kernel-log` / `KERNEL_LOG` | `/dev/kmsg` | kernel log read for GPU hangs; `--kernel-log=` turns hang detection off |
 
 Requests are rounded up to 64 MiB; published VRAM is total minus the reserve,
 rounded down to 64 MiB.
@@ -406,9 +410,11 @@ Per GPU (labels `device`, `vendor`, `pci_bus_id`), refreshed on every rescan:
 | `dri_gtt_used_bytes` | system RAM mapped for the GPU (GTT); grows when VRAM is full and buffers are evicted to RAM |
 | `dri_gpu_temperature_celsius` | GPU temperature (hwmon) |
 | `dri_gpu_core_clock_hertz`, `dri_gpu_memory_clock_hertz` | current core and memory clocks (hwmon) |
+| `dri_gpu_hung` | 1 when the kernel reported the GPU hung during the current boot |
 
 Per node: `dri_claims_prepared`, `dri_gpus_skipped`,
-`dri_prepare_errors_total`, `dri_discovery_errors_total`. A reading the
+`dri_prepare_errors_total`, `dri_discovery_errors_total`,
+`dri_kernel_log_watched` (1 while hang detection runs). A reading the
 backend cannot take is left out rather than reported as zero.
 
 Ready-made monitoring in [`deploy/examples/`](deploy/examples/):
@@ -429,6 +435,37 @@ everything on that GPU slows down. On a FirePro D700, four llama.cpp
 instances that need ~2 GiB each on one 6 GiB GPU pushed 3.4 GiB into GTT and
 cut total generation speed from 41 to 16 tokens/s; a single instance that
 fits keeps ~0.3 GiB in GTT.
+
+## Hung GPUs
+
+A GPU job that never finishes makes `amdgpu` log
+`amdgpu 0000:02:00.0: ring gfx timeout, ...`. With `amdgpu.gpu_recovery=0`
+(common on older GPUs, whose reset can take the whole host down) the GPU
+then stays hung until the node reboots: every process using it is stuck in
+the kernel, its pods cannot be killed, and a new pod on it fails its
+startup probe forever, while the node itself stays `Ready`.
+
+The plugin reads the kernel log and, on such a line:
+
+1. publishes the device with the taint `<driver-name>/hung` and effect
+   `NoExecute`: Kubernetes evicts the pods whose claims use the GPU (their
+   controllers recreate them on healthy GPUs) and allocates no new claim on
+   it;
+2. refuses to prepare claims on it;
+3. sets `dri_gpu_hung` to 1 (see the `DRIGPUHung` alert).
+
+The hang is remembered in the plugin directory with the kernel's boot ID,
+so a restarted plugin keeps the taint; a reboot clears it. Only the timeout
+line counts: `GPU recovery disabled.` alone is printed at every boot.
+
+Reading `/dev/kmsg` needs a privileged container (the device cgroup of an
+unprivileged one refuses to open it, whatever its capabilities). Without
+it the plugin still runs, `dri_kernel_log_watched` is 0 and hangs are not
+detected. Device taints need Kubernetes 1.36 or later (`DRADeviceTaints`,
+on by default).
+
+Draining a whole node is out of scope: a hung GPU usually leaves the
+node's other GPUs and CPU work healthy.
 
 ## Comparison
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/ipsupport-llc/dra-driver-dri/internal/cdi"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/devices"
+	"github.com/ipsupport-llc/dra-driver-dri/internal/hang"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/metrics"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/prepare"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/state"
@@ -70,8 +71,11 @@ func run() error {
 	}
 
 	m := metrics.New()
-	d := newDriver(devices.Config{NodeName: f.NodeName, ReserveBytes: f.ReserveBytes, Shares: f.DeviceShares}, f.SysRoot, vram.NewDetector(overrides), m, cancel)
+	d := newDriver(devices.Config{NodeName: f.NodeName, DriverName: f.DriverName, ReserveBytes: f.ReserveBytes, Shares: f.DeviceShares}, f.SysRoot, vram.NewDetector(overrides), m, cancel)
 	d.prep = &prepare.Preparer{DriverName: f.DriverName, Inventory: d.Inventory, CDI: writer, Store: store}
+	if f.KernelLog != "" {
+		watchKernelLog(ctx, d, f.KernelLog, filepath.Join(pluginDir, "hung.json"))
+	}
 	if err := d.Refresh(ctx); err != nil {
 		return err
 	}
@@ -134,6 +138,51 @@ func run() error {
 			if err := d.Rescan(ctx, helper); err != nil {
 				logger.Error(err, "Rescan failed")
 			}
+		case <-d.kick:
+			if err := d.Rescan(ctx, helper); err != nil {
+				logger.Error(err, "Rescan failed")
+			}
 		}
 	}
+}
+
+// watchKernelLog loads the hung-GPU latch of this boot and follows the
+// kernel log for new hangs. Hang detection is best effort: without the
+// kernel log (an unprivileged container cannot open /dev/kmsg) the driver
+// still runs, still taints GPUs latched earlier in this boot, and reports
+// dri_kernel_log_watched 0.
+func watchKernelLog(ctx context.Context, d *Driver, path, latchPath string) {
+	logger := klog.FromContext(ctx)
+	bootID, err := hang.BootID("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		logger.Error(err, "GPU hang detection is off")
+		return
+	}
+	latch, err := hang.OpenLatch(latchPath, bootID)
+	if err != nil {
+		logger.Error(err, "Discarding the unreadable hung-GPU latch")
+		_ = os.Remove(latchPath)
+		if latch, err = hang.OpenLatch(latchPath, bootID); err != nil {
+			logger.Error(err, "GPU hang detection is off")
+			return
+		}
+	}
+	d.latch = latch
+	if hung := latch.Hung(); len(hung) > 0 {
+		logger.Info("GPUs hung earlier in this boot", "pciBusIDs", hung)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		logger.Error(err, "GPU hang detection is off: cannot read the kernel log", "path", path)
+		return
+	}
+	d.metrics.SetKernelLogWatched(true)
+	context.AfterFunc(ctx, func() { _ = f.Close() })
+	go func() {
+		err := hang.Watch(f, func(pci string) { d.OnHang(ctx, pci) })
+		d.metrics.SetKernelLogWatched(false)
+		if ctx.Err() == nil {
+			logger.Error(err, "GPU hang detection stopped")
+		}
+	}()
 }

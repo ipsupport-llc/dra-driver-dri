@@ -18,6 +18,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/ipsupport-llc/dra-driver-dri/internal/devices"
+	"github.com/ipsupport-llc/dra-driver-dri/internal/hang"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/metrics"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/prepare"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/procvram"
@@ -38,6 +39,11 @@ type Driver struct {
 	prep    *prepare.Preparer
 	metrics *metrics.Metrics
 	cancel  context.CancelCauseFunc
+	// latch holds the GPUs the kernel reported hung; nil when the kernel
+	// log is not watched.
+	latch *hang.Latch
+	// kick asks the main loop for an immediate rescan.
+	kick chan struct{}
 
 	mu        sync.RWMutex
 	pubs      []devices.Published
@@ -46,7 +52,7 @@ type Driver struct {
 }
 
 func newDriver(cfg devices.Config, sysRoot string, det vram.Detector, m *metrics.Metrics, cancel context.CancelCauseFunc) *Driver {
-	return &Driver{cfg: cfg, sysRoot: sysRoot, det: det, metrics: m, cancel: cancel}
+	return &Driver{cfg: cfg, sysRoot: sysRoot, det: det, metrics: m, cancel: cancel, kick: make(chan struct{}, 1)}
 }
 
 func (d *Driver) scan() ([]devices.Published, []devices.Skipped, string, error) {
@@ -57,8 +63,9 @@ func (d *Driver) scan() ([]devices.Published, []devices.Skipped, string, error) 
 	}
 	pubs, skipped := devices.Build(d.cfg, gpus, d.det)
 	var b strings.Builder
-	for _, p := range pubs {
-		fmt.Fprintf(&b, "%s|%s|%s|%s|%d;", p.Name, p.GPU.RenderNode, p.GPU.KernelDriver, p.GPU.DeviceID, p.VRAMPublished)
+	for i, p := range pubs {
+		pubs[i].Hung = d.latch != nil && d.latch.Has(p.GPU.PCIAddress)
+		fmt.Fprintf(&b, "%s|%s|%s|%s|%d|%t;", p.Name, p.GPU.RenderNode, p.GPU.KernelDriver, p.GPU.DeviceID, p.VRAMPublished, pubs[i].Hung)
 	}
 	b.WriteString("#")
 	for _, s := range skipped {
@@ -108,6 +115,25 @@ func (d *Driver) Rescan(ctx context.Context, pub publisher) error {
 	}
 	d.refreshMetrics()
 	return nil
+}
+
+// OnHang latches a GPU the kernel reported hung and asks for an immediate
+// rescan, which republishes the device with the hung taint.
+func (d *Driver) OnHang(ctx context.Context, pci string) {
+	logger := klog.FromContext(ctx)
+	added, err := d.latch.Add(pci)
+	if err != nil {
+		// The GPU is latched in memory; only a plugin restart would lose it.
+		logger.Error(err, "Saving the hung GPU failed", "pciBusID", pci)
+	}
+	if !added {
+		return
+	}
+	logger.Info("GPU hung, tainting it until the node reboots", "pciBusID", pci)
+	select {
+	case d.kick <- struct{}{}:
+	default:
+	}
 }
 
 // Inventory returns the published devices by name.

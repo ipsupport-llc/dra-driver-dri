@@ -28,8 +28,9 @@ const DefaultStep int64 = 64 << 20
 // Config holds the node-level publishing settings.
 type Config struct {
 	NodeName     string
-	ReserveBytes int64 // subtracted from each GPU's VRAM
-	StepBytes    int64 // request granularity; published VRAM is rounded down to it
+	DriverName   string // prefix of the hung-GPU taint key
+	ReserveBytes int64  // subtracted from each GPU's VRAM
+	StepBytes    int64  // request granularity; published VRAM is rounded down to it
 	// Shares, when positive, is published as each GPU's "shares" capacity:
 	// a claim takes one share by default, so at most Shares claims share a
 	// GPU, and a claim that asks for more shares leaves room for fewer others.
@@ -50,7 +51,14 @@ type Published struct {
 	Vendor        string
 	VRAMTotal     int64
 	VRAMPublished int64
+	// Hung is set when the kernel reported the GPU hung during this boot.
+	// The device stays published, with a NoExecute taint.
+	Hung bool
 }
+
+// HungTaintKey is the device taint of a hung GPU: pods using it are
+// evicted and no new claim is allocated on it.
+func HungTaintKey(driverName string) string { return driverName + "/hung" }
 
 // Skipped is a GPU left out of the ResourceSlice, with the reason.
 type Skipped struct {
@@ -131,6 +139,10 @@ func Resources(cfg Config, pubs []Published) resourceslice.DriverResources {
 		if cfg.Shares > 0 {
 			capacity[CapacityShares] = sharesCapacity(cfg.Shares)
 		}
+		var taints []resourceapi.DeviceTaint
+		if p.Hung {
+			taints = []resourceapi.DeviceTaint{{Key: HungTaintKey(cfg.DriverName), Effect: resourceapi.DeviceTaintEffectNoExecute}}
+		}
 		devs = append(devs, resourceapi.Device{
 			Name: p.Name,
 			Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
@@ -142,6 +154,7 @@ func Resources(cfg Config, pubs []Published) resourceslice.DriverResources {
 			},
 			Capacity:                 capacity,
 			AllowMultipleAllocations: ptr.To(true),
+			Taints:                   taints,
 		})
 	}
 	return resourceslice.DriverResources{

@@ -162,8 +162,10 @@ cluster's own infrastructure code deploys it.
 
 - **DaemonSet** on labelled GPU nodes. Host mounts:
   `/var/lib/kubelet/plugins`, `/var/lib/kubelet/plugins_registry`,
-  `/var/run/cdi`, `/sys` (read-only). No privileges beyond what the plugin
-  registration and CDI directory require.
+  `/var/run/cdi`, `/sys` (read-only), `/dev/kmsg` (read-only). The
+  container is privileged only to open `/dev/kmsg` for GPU hang detection
+  (README, Hung GPUs); with `--kernel-log=` it needs no privileges beyond
+  what the plugin registration and CDI directory require.
 - **RBAC:** read `resourceclaims` (the plugin never writes claim status),
   read `nodes`, write `resourceslices`; a ValidatingAdmissionPolicy limits
   slice writes to the node in the plugin pod's ServiceAccount token.
