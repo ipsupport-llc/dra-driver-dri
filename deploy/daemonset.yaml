@@ -34,9 +34,9 @@ spec:
             requests: {cpu: 10m, memory: 32Mi}
             limits: {memory: 128Mi}
           securityContext:
-            # Privileged only to read /dev/kmsg for GPU hangs (README, Hung
-            # GPUs); with --kernel-log= this can be unprivileged with
-            # capabilities: {drop: ["ALL"]}.
+            # Privileged to open /dev/kmsg for GPU hangs (README, Hung GPUs),
+            # which makes the plugin root on the node. With the flag
+            # --kernel-log= drop this and set capabilities: {drop: ["ALL"]}.
             privileged: true
             runAsUser: 0
             readOnlyRootFilesystem: true

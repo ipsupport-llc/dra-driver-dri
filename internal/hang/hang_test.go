@@ -18,6 +18,11 @@ func TestMatch(t *testing.T) {
 		{"3,123456,85032000000,-;amdgpu 0000:02:00.0: ring gfx timeout, signaled seq=795476, emitted seq=795478", "0000:02:00.0"},
 		{"3,123460,85277000000,-;amdgpu 0000:02:00.0: ring sdma1 timeout, signaled seq=5902, emitted seq=5904", "0000:02:00.0"},
 		{"3,1,2,-;amdgpu 0000:83:00.1: ring gfx_0.0.0 timeout, signaled seq=1, emitted seq=3", "0000:83:00.1"},
+		// Newer kernels repeat the driver name after the device prefix.
+		{"3,1,2,-;amdgpu 0000:83:00.0: amdgpu: ring gfx_0.0.0 timeout, signaled seq=1, emitted seq=3", "0000:83:00.0"},
+		// Written to /dev/kmsg by a process (facility user, 1*8+3): the
+		// kernel never lets userspace log as facility kern.
+		{"11,5,6,-;amdgpu 0000:02:00.0: ring gfx timeout, signaled seq=1, emitted seq=3", ""},
 		// Printed at every boot with amdgpu.gpu_recovery=0, and after a hang:
 		// not a hang by itself.
 		{"6,99,1000,-;amdgpu 0000:02:00.0: GPU recovery disabled.", ""},
@@ -100,13 +105,102 @@ func TestLatchPersistsWithinOneBoot(t *testing.T) {
 	}
 }
 
-func TestLatchRejectsACorruptFile(t *testing.T) {
+func TestLatchOverwritesACorruptFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hung.json")
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hang.OpenLatch(path, "boot-1"); err == nil {
-		t.Fatal("OpenLatch accepted a corrupt file")
+	l, err := hang.OpenLatch(path, "boot-1")
+	if err == nil || l == nil {
+		t.Fatalf("OpenLatch = %v, %v; want an empty latch and the decode error", l, err)
+	}
+	if _, err := l.Add("0000:02:00.0"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := hang.OpenLatch(path, "boot-1")
+	if err != nil || !again.Has("0000:02:00.0") {
+		t.Fatalf("after overwrite: %v, %v", again.Hung(), err)
+	}
+}
+
+func TestTwoInstancesKeepEachOthersHangs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hung.json")
+	a, err := hang.OpenLatch(path, "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := hang.OpenLatch(path, "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Add("0000:02:00.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Add("0000:06:00.0"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := hang.OpenLatch(path, "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.Hung(), ","); got != "0000:02:00.0,0000:06:00.0" {
+		t.Fatalf("file after both instances = %s", got)
+	}
+	if err := a.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Has("0000:06:00.0") {
+		t.Fatal("Reload did not pick up the other instance's hang")
+	}
+}
+
+func TestLatchRetriesAFailedSave(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hung.json")
+	l, err := hang.OpenLatch(path, "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Add("0000:02:00.0"); err == nil {
+		t.Fatal("Add saved into a read-only directory")
+	}
+	if !l.Has("0000:02:00.0") {
+		t.Fatal("a failed save must still latch the GPU in memory")
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Add("0000:02:00.0"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := hang.OpenLatch(path, "boot-1")
+	if err != nil || !again.Has("0000:02:00.0") {
+		t.Fatalf("the retry did not save: %v, %v", again.Hung(), err)
+	}
+}
+
+func TestRecoveryDisabled(t *testing.T) {
+	root := t.TempDir()
+	if off, err := hang.RecoveryDisabled(root); err == nil || off {
+		t.Fatalf("without amdgpu: %v, %v; want false and an error", off, err)
+	}
+	dir := filepath.Join(root, "module", "amdgpu", "parameters")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for value, want := range map[string]bool{"0\n": true, "-1\n": false, "1\n": false} {
+		if err := os.WriteFile(filepath.Join(dir, "gpu_recovery"), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if off, err := hang.RecoveryDisabled(root); err != nil || off != want {
+			t.Errorf("gpu_recovery=%q: %v, %v; want %v", value, off, err, want)
+		}
 	}
 }
 

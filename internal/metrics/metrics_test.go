@@ -103,3 +103,15 @@ func TestUpdateUnknownReadings(t *testing.T) {
 		t.Fatalf("dri_vram_total_bytes: %d series, want 1", n)
 	}
 }
+
+func TestKernelLogGaugeOnlyWhenDetectionRuns(t *testing.T) {
+	m := metrics.New()
+	if n, err := testutil.GatherAndCount(m.Registry(), "dri_kernel_log_watched"); err != nil || n != 0 {
+		t.Fatalf("dri_kernel_log_watched exported before detection started: %d, %v", n, err)
+	}
+	m.SetKernelLogWatched(false)
+	m.SetKernelLogWatched(false)
+	if n, err := testutil.GatherAndCount(m.Registry(), "dri_kernel_log_watched"); err != nil || n != 1 {
+		t.Fatalf("dri_kernel_log_watched series: %d, %v", n, err)
+	}
+}

@@ -48,7 +48,7 @@ func parseFlags(args []string, getenv func(string) string) (Flags, error) {
 	fs.StringVar(&interval, "rescan-interval", or("RESCAN_INTERVAL", "30s"), "sysfs rescan period (RESCAN_INTERVAL)")
 	fs.StringVar(&f.Overrides, "overrides", or("OVERRIDES", ""), "YAML file of VRAM per PCI address (OVERRIDES)")
 	fs.StringVar(&f.MetricsAddr, "metrics-addr", or("METRICS_ADDR", ":8080"), "Prometheus endpoint (METRICS_ADDR)")
-	fs.StringVar(&f.KernelLog, "kernel-log", or("KERNEL_LOG", "/dev/kmsg"), "kernel log device read for GPU hangs; empty (--kernel-log=) turns hang detection off (KERNEL_LOG)")
+	fs.StringVar(&f.KernelLog, "kernel-log", or("KERNEL_LOG", "/dev/kmsg"), "kernel log device read for GPU hangs (KERNEL_LOG); only the flag can turn detection off: --kernel-log=")
 	fs.StringVar(&f.SysRoot, "sys-root", or("SYS_ROOT", "/sys"), "sysfs mount (SYS_ROOT)")
 	fs.StringVar(&f.CDIRoot, "cdi-root", or("CDI_ROOT", "/var/run/cdi"), "CDI spec directory (CDI_ROOT)")
 	fs.StringVar(&f.RegistrarDir, "kubelet-registrar-directory-path", or("KUBELET_REGISTRAR_DIRECTORY_PATH", kubeletplugin.KubeletRegistryDir), "kubelet plugin registration directory")

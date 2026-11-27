@@ -2,6 +2,8 @@
 package metrics
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ipsupport-llc/dra-driver-dri/internal/devices"
@@ -20,6 +22,7 @@ type Metrics struct {
 	stats                          map[vram.Stat]*prometheus.GaugeVec
 	claims, skipped, kernelLog     prometheus.Gauge
 	PrepareErrors, DiscoveryErrors prometheus.Counter
+	kernelLogOnce                  sync.Once
 }
 
 func gauge(name, help string) *prometheus.GaugeVec {
@@ -55,7 +58,7 @@ func New() *Metrics {
 		PrepareErrors:   prometheus.NewCounter(prometheus.CounterOpts{Name: "dri_prepare_errors_total", Help: "Failed claim preparations."}),
 		DiscoveryErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "dri_discovery_errors_total", Help: "Failed GPU scans."}),
 	}
-	m.reg.MustRegister(m.total, m.published, m.allocated, m.hung, m.kernelLog, m.claimUsed, m.claimClaimed, m.claims, m.skipped, m.PrepareErrors, m.DiscoveryErrors)
+	m.reg.MustRegister(m.total, m.published, m.allocated, m.hung, m.claimUsed, m.claimClaimed, m.claims, m.skipped, m.PrepareErrors, m.DiscoveryErrors)
 	for _, g := range m.stats {
 		m.reg.MustRegister(g)
 	}
@@ -101,8 +104,12 @@ func (m *Metrics) Update(pubs []devices.Published, allocated map[string]int64, s
 // SetSkipped records how many GPUs the last scan left out.
 func (m *Metrics) SetSkipped(n int) { m.skipped.Set(float64(n)) }
 
-// SetKernelLogWatched records whether GPU hangs are being detected.
+// SetKernelLogWatched records whether GPU hangs are being detected. The
+// gauge appears on the first call, so a plugin that does not try to
+// detect hangs (detection turned off, GPU recovery on) does not export it
+// and an alert on 0 stays quiet.
 func (m *Metrics) SetKernelLogWatched(on bool) {
+	m.kernelLogOnce.Do(func() { m.reg.MustRegister(m.kernelLog) })
 	v := 0.0
 	if on {
 		v = 1

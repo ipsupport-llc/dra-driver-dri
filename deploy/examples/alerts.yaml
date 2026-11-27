@@ -37,6 +37,7 @@ spec:
           labels: {severity: critical}
           annotations:
             summary: "{{ $labels.node }} {{ $labels.device }}: GPU hung; its pods were evicted and it stays unusable until the node reboots"
+        # Only plugins that try to detect hangs export the gauge.
         - alert: DRIKernelLogNotWatched
           expr: dri_kernel_log_watched == 0
           for: 15m

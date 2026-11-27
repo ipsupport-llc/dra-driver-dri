@@ -392,7 +392,7 @@ pod that references it lands on the same GPU and shares that one VRAM amount.
 | `--rescan-interval` / `RESCAN_INTERVAL` | `30s` | how often GPUs are rescanned |
 | `--overrides` / `OVERRIDES` | — | YAML of VRAM per PCI address, for GPUs without a backend |
 | `--metrics-addr` / `METRICS_ADDR` | `:8080` | Prometheus endpoint |
-| `--kernel-log` / `KERNEL_LOG` | `/dev/kmsg` | kernel log read for GPU hangs; `--kernel-log=` turns hang detection off |
+| `--kernel-log` / `KERNEL_LOG` | `/dev/kmsg` | kernel log read for GPU hangs (only with `amdgpu.gpu_recovery=0`); the flag `--kernel-log=` turns hang detection off |
 
 Requests are rounded up to 64 MiB; published VRAM is total minus the reserve,
 rounded down to 64 MiB.
@@ -414,7 +414,8 @@ Per GPU (labels `device`, `vendor`, `pci_bus_id`), refreshed on every rescan:
 
 Per node: `dri_claims_prepared`, `dri_gpus_skipped`,
 `dri_prepare_errors_total`, `dri_discovery_errors_total`,
-`dri_kernel_log_watched` (1 while hang detection runs). A reading the
+`dri_kernel_log_watched` (1 while hang detection runs, 0 when it cannot
+read the kernel log, absent when it does not try). A reading the
 backend cannot take is left out rather than reported as zero.
 
 Ready-made monitoring in [`deploy/examples/`](deploy/examples/):
@@ -445,24 +446,35 @@ then stays hung until the node reboots: every process using it is stuck in
 the kernel, its pods cannot be killed, and a new pod on it fails its
 startup probe forever, while the node itself stays `Ready`.
 
-The plugin reads the kernel log and, on such a line:
+When `/sys/module/amdgpu/parameters/gpu_recovery` is `0`, the plugin reads
+the kernel log and, on such a line from the kernel (records a process
+writes to `/dev/kmsg` never count):
 
 1. publishes the device with the taint `<driver-name>/hung` and effect
-   `NoExecute`: Kubernetes evicts the pods whose claims use the GPU (their
-   controllers recreate them on healthy GPUs) and allocates no new claim on
-   it;
+   `NoExecute`: Kubernetes deletes the pods whose claims use the GPU and
+   allocates no new claim on it. Their controllers create replacements on
+   healthy GPUs at once, even while the old pods stay `Terminating`
+   because the kernel holds their processes;
 2. refuses to prepare claims on it;
 3. sets `dri_gpu_hung` to 1 (see the `DRIGPUHung` alert).
 
-The hang is remembered in the plugin directory with the kernel's boot ID,
-so a restarted plugin keeps the taint; a reboot clears it. Only the timeout
-line counts: `GPU recovery disabled.` alone is printed at every boot.
+With recovery on, the kernel resets a hung GPU itself, so the plugin does
+not watch for hangs. The hang is remembered in the plugin directory with
+the kernel's boot ID, so a restarted plugin keeps the taint (also with
+`--kernel-log=`); a reboot clears it. Only the timeout line counts:
+`GPU recovery disabled.` alone is printed at every boot.
 
-Reading `/dev/kmsg` needs a privileged container (the device cgroup of an
-unprivileged one refuses to open it, whatever its capabilities). Without
-it the plugin still runs, `dri_kernel_log_watched` is 0 and hangs are not
-detected. Device taints need Kubernetes 1.36 or later (`DRADeviceTaints`,
-on by default).
+Reading `/dev/kmsg` needs a privileged container: the device cgroup of an
+unprivileged one refuses to open it, whatever its capabilities. Privileged
+means every capability and every host device, so a compromised plugin is
+root on its node; the reference DaemonSet accepts that for hang detection.
+Pass `--kernel-log=` (the flag; an empty `KERNEL_LOG` means the default)
+and drop `privileged` to run without it. A plugin that cannot open the
+log runs as before and reports `dri_kernel_log_watched 0`; one that does
+not try (recovery on, or `--kernel-log=`) does not export the gauge.
+Device taints need Kubernetes 1.36 or later (`DRADeviceTaints`, on by
+default). Older kernels that log the timeout without the device prefix
+(`[drm:amdgpu_job_timedout [amdgpu]] *ERROR* ring ...`) are not detected.
 
 Draining a whole node is out of scope: a hung GPU usually leaves the
 node's other GPUs and CPU work healthy.

@@ -61,6 +61,12 @@ func (d *Driver) scan() ([]devices.Published, []devices.Skipped, string, error) 
 		d.metrics.DiscoveryErrors.Inc()
 		return nil, nil, "", fmt.Errorf("scan %s: %w", d.sysRoot, err)
 	}
+	if d.latch != nil {
+		// Hangs another plugin instance latched during a rolling update.
+		if err := d.latch.Reload(); err != nil {
+			klog.Background().Error(err, "Reloading the hung-GPU latch failed")
+		}
+	}
 	pubs, skipped := devices.Build(d.cfg, gpus, d.det)
 	var b strings.Builder
 	for i, p := range pubs {
