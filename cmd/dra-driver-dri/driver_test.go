@@ -198,3 +198,21 @@ func TestHangRepublishesWithTaintAndRefusesClaims(t *testing.T) {
 		t.Fatalf("prepare on a hung GPU: %+v, %v", res, err)
 	}
 }
+
+func TestInventorySeesAHangBeforeTheNextScan(t *testing.T) {
+	d, _, _ := testDriver(t)
+	l, err := hang.OpenLatch(filepath.Join(t.TempDir(), "hung.json"), "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.latch = l
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Add("0000:06:00.0"); err != nil {
+		t.Fatal(err)
+	}
+	if !d.Inventory()["pci-0000-06-00-0"].Hung {
+		t.Fatal("Inventory must report a GPU latched after the last scan as hung")
+	}
+}

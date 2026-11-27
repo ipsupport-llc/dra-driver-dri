@@ -142,12 +142,17 @@ func (d *Driver) OnHang(ctx context.Context, pci string) {
 	}
 }
 
-// Inventory returns the published devices by name.
+// Inventory returns the published devices by name. A GPU latched since the
+// last scan already counts as hung, so Prepare refuses it before the
+// republish.
 func (d *Driver) Inventory() map[string]devices.Published {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	out := make(map[string]devices.Published, len(d.pubs))
 	for _, p := range d.pubs {
+		if d.latch != nil && d.latch.Has(p.GPU.PCIAddress) {
+			p.Hung = true
+		}
 		out[p.Name] = p
 	}
 	return out
