@@ -153,19 +153,26 @@ func (l *Latch) merge(pcis []string) {
 	}
 }
 
-// Reload adds the GPUs another plugin instance saved. It never forgets one.
+// Reload adds the GPUs another plugin instance saved, and saves again
+// after a failed save. It never forgets a GPU.
 func (l *Latch) Reload() error {
 	saved, err := l.load()
 	if saved == nil {
 		return err
 	}
 	l.merge(saved)
+	l.mu.Lock()
+	dirty := l.dirty
+	l.mu.Unlock()
+	if dirty {
+		return l.save()
+	}
 	return nil
 }
 
 // Add latches a GPU and saves the latch. It reports whether the GPU was
 // new. A GPU latched by an Add whose save failed is saved again by the
-// next Add, even of the same GPU.
+// next Add, even of the same GPU, or by the next Reload.
 func (l *Latch) Add(pci string) (bool, error) {
 	l.mu.Lock()
 	added := !l.hung[pci]
@@ -194,10 +201,13 @@ func (l *Latch) save() error {
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 
 	// An undecodable file is replaced by memory, which already holds
-	// everything this instance knows.
-	if saved, _ := l.load(); saved != nil {
-		l.merge(saved)
+	// everything this instance knows; an unreadable one is left alone, as
+	// it may hold another instance's hangs.
+	saved, err := l.load()
+	if saved == nil {
+		return err
 	}
+	l.merge(saved)
 	l.mu.Lock()
 	f := latchFile{BootID: l.bootID, Hung: slices.Sorted(maps.Keys(l.hung))}
 	l.mu.Unlock()

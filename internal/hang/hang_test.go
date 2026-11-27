@@ -214,3 +214,62 @@ func TestBootID(t *testing.T) {
 		t.Errorf("BootID = %q, %v", id, err)
 	}
 }
+
+func TestSaveKeepsTheFileWhenItCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	path := filepath.Join(t.TempDir(), "hung.json")
+	a, err := hang.OpenLatch(path, "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := hang.OpenLatch(path, "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Add("0000:02:00.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Add("0000:06:00.0"); err == nil {
+		t.Fatal("Add replaced a latch it could not read")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := hang.OpenLatch(path, "boot-1")
+	if err != nil || !c.Has("0000:02:00.0") {
+		t.Fatalf("the other instance's hang was lost: %v, %v", c.Hung(), err)
+	}
+}
+
+func TestReloadRetriesAFailedSave(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hung.json")
+	l, err := hang.OpenLatch(path, "boot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Add("0000:02:00.0"); err == nil {
+		t.Fatal("Add saved into a read-only directory")
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := hang.OpenLatch(path, "boot-1")
+	if err != nil || !again.Has("0000:02:00.0") {
+		t.Fatalf("Reload did not save the pending hang: %v, %v", again.Hung(), err)
+	}
+}
