@@ -194,7 +194,7 @@ func (l *Latch) save() error {
 	if err != nil {
 		return fmt.Errorf("lock hang latch: %w", err)
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return fmt.Errorf("lock hang latch: %w", err)
 	}
@@ -263,6 +263,6 @@ func syncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return d.Sync()
 }
