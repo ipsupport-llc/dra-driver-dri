@@ -27,7 +27,7 @@ import (
 
 // ringTimeout matches the message part of a kernel log record. Newer
 // kernels repeat the driver name ("amdgpu 0000:02:00.0: amdgpu: ring ...").
-var ringTimeout = regexp.MustCompile(`^amdgpu ([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]): (?:amdgpu: )?ring \S+ timeout`)
+var ringTimeout = regexp.MustCompile(`^amdgpu ([0-9a-f]{4,}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]): (?:amdgpu: )?ring \S+ timeout`)
 
 // Match returns the PCI address of the GPU that a /dev/kmsg record
 // ("prio,seq,usec,flags;message") reports as hung. Only kernel records

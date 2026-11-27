@@ -162,16 +162,25 @@ func run() error {
 }
 
 // watchKernelLog follows the kernel log for GPU hangs until ctx ends,
-// reopening it after an error. It does nothing unless amdgpu runs with
+// reopening it after an error. It starts only once amdgpu runs with
 // gpu_recovery=0: with recovery on, the kernel resets a hung GPU itself.
 // Without access to the kernel log (an unprivileged container cannot open
 // /dev/kmsg) the driver still runs and reports dri_kernel_log_watched 0.
 func watchKernelLog(ctx context.Context, d *Driver, path, sysRoot string) {
 	logger := klog.FromContext(ctx)
-	off, err := hang.RecoveryDisabled(sysRoot)
-	if err != nil || !off {
-		logger.Info("GPU hang detection is off: amdgpu does not run with gpu_recovery=0", "err", err)
-		return
+	// amdgpu may load after the plugin starts, and gpu_recovery is a
+	// writable module parameter: check until it reads 0.
+	for {
+		off, err := hang.RecoveryDisabled(sysRoot)
+		if err == nil && off {
+			break
+		}
+		logger.Info("GPU hang detection waits: amdgpu does not run with gpu_recovery=0", "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Minute):
+		}
 	}
 	d.metrics.SetKernelLogWatched(false)
 	for {

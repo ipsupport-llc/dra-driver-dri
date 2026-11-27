@@ -18,6 +18,8 @@ func TestMatch(t *testing.T) {
 		{"3,123456,85032000000,-;amdgpu 0000:02:00.0: ring gfx timeout, signaled seq=795476, emitted seq=795478", "0000:02:00.0"},
 		{"3,123460,85277000000,-;amdgpu 0000:02:00.0: ring sdma1 timeout, signaled seq=5902, emitted seq=5904", "0000:02:00.0"},
 		{"3,1,2,-;amdgpu 0000:83:00.1: ring gfx_0.0.0 timeout, signaled seq=1, emitted seq=3", "0000:83:00.1"},
+		// PCI domains above ffff print with more digits.
+		{"3,1,2,-;amdgpu 10000:02:00.0: ring gfx timeout, signaled seq=1, emitted seq=3", "10000:02:00.0"},
 		// Newer kernels repeat the driver name after the device prefix.
 		{"3,1,2,-;amdgpu 0000:83:00.0: amdgpu: ring gfx_0.0.0 timeout, signaled seq=1, emitted seq=3", "0000:83:00.0"},
 		// Written to /dev/kmsg by a process (facility user, 1*8+3): the
