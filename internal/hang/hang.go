@@ -139,7 +139,7 @@ func (l *Latch) load() ([]string, error) {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return []string{}, fmt.Errorf("decode hang latch %s: %w", l.path, err)
 	}
-	if f.BootID != l.bootID {
+	if f.BootID != l.bootID || f.Hung == nil {
 		return []string{}, nil
 	}
 	return f.Hung, nil

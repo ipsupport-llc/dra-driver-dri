@@ -275,3 +275,14 @@ func TestReloadRetriesAFailedSave(t *testing.T) {
 		t.Fatalf("Reload did not save the pending hang: %v, %v", again.Hung(), err)
 	}
 }
+
+func TestLatchWithNullList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hung.json")
+	if err := os.WriteFile(path, []byte(`{"bootID":"boot-1","hung":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := hang.OpenLatch(path, "boot-1")
+	if err != nil || l == nil || len(l.Hung()) != 0 {
+		t.Fatalf("OpenLatch = %v, %v; want an empty latch", l, err)
+	}
+}
