@@ -66,6 +66,9 @@ func (p *Preparer) Prepare(claim *resourceapi.ResourceClaim) ([]kubeletplugin.De
 		if !ok {
 			return nil, fmt.Errorf("claim %s/%s: device %s is not available on this node", claim.Namespace, claim.Name, r.Device)
 		}
+		if pub.Hung {
+			return nil, fmt.Errorf("claim %s/%s: %w", claim.Namespace, claim.Name, errHung(r.Device))
+		}
 		vram := pub.VRAMPublished
 		if q, ok := r.ConsumedCapacity[devices.CapacityVRAM]; ok {
 			vram = q.Value()
@@ -152,12 +155,19 @@ func edit(r state.Device, pub devices.Published) cdi.Edit {
 		PCIAddress: pub.GPU.PCIAddress, Vendor: pub.Vendor, VRAMBytes: r.VRAMBytes}
 }
 
+func errHung(device string) error {
+	return fmt.Errorf("device %s is hung (the kernel reported a GPU timeout); it stays unusable until the node reboots", device)
+}
+
 func editsFor(recs []state.Device, inv map[string]devices.Published) ([]cdi.Edit, error) {
 	edits := make([]cdi.Edit, 0, len(recs))
 	for _, r := range recs {
 		pub, ok := inv[r.Device]
 		if !ok {
 			return nil, fmt.Errorf("device %s is not available on this node", r.Device)
+		}
+		if pub.Hung {
+			return nil, errHung(r.Device)
 		}
 		edits = append(edits, edit(r, pub))
 	}

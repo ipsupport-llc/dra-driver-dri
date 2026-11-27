@@ -34,11 +34,14 @@ spec:
             requests: {cpu: 10m, memory: 32Mi}
             limits: {memory: 128Mi}
           securityContext:
+            # Privileged to open /dev/kmsg for GPU hangs (README, Hung GPUs),
+            # which makes the plugin root on the node. With the flag
+            # --kernel-log= drop this and set capabilities: {drop: ["ALL"]}.
+            privileged: true
             runAsUser: 0
-            allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
-            capabilities: {drop: ["ALL"]}
           volumeMounts:
+            - {name: kmsg, mountPath: /dev/kmsg, readOnly: true}
             - {name: plugins-registry, mountPath: /var/lib/kubelet/plugins_registry}
             - {name: plugins, mountPath: /var/lib/kubelet/plugins}
             - {name: cdi, mountPath: /var/run/cdi}
@@ -52,3 +55,5 @@ spec:
           hostPath: {path: /var/run/cdi, type: DirectoryOrCreate}
         - name: sys
           hostPath: {path: /sys, type: Directory}
+        - name: kmsg
+          hostPath: {path: /dev/kmsg, type: CharDevice}

@@ -16,7 +16,7 @@ func TestParseFlagsDefaultsFromEnv(t *testing.T) {
 	}
 	if f.DriverName != "gpu.example.com" || f.NodeName != "node-a" || f.PodUID != "pod-1" ||
 		f.ReserveBytes != 256<<20 || f.DeviceShares != 0 || f.RescanInterval != 30*time.Second || f.MetricsAddr != ":8080" ||
-		f.SysRoot != "/sys" || f.CDIRoot != "/var/run/cdi" ||
+		f.SysRoot != "/sys" || f.CDIRoot != "/var/run/cdi" || f.KernelLog != "/dev/kmsg" ||
 		f.RegistrarDir != "/var/lib/kubelet/plugins_registry" || f.PluginsDir != "/var/lib/kubelet/plugins" {
 		t.Fatalf("flags = %+v", f)
 	}
@@ -30,6 +30,13 @@ func TestParseFlagsOverrideEnv(t *testing.T) {
 	}
 	if f.ReserveBytes != 512<<20 || f.RescanInterval != 10*time.Second || f.DeviceShares != 3 {
 		t.Fatalf("flags = %+v", f)
+	}
+}
+
+func TestParseFlagsKernelLogOff(t *testing.T) {
+	f, err := parseFlags([]string{"--kernel-log="}, env(map[string]string{"DRIVER_NAME": "gpu.example.com", "NODE_NAME": "node-a"}))
+	if err != nil || f.KernelLog != "" {
+		t.Fatalf("flags = %+v, %v", f, err)
 	}
 }
 

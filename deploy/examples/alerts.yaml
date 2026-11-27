@@ -32,6 +32,18 @@ spec:
           labels: {severity: warning}
           annotations:
             summary: "{{ $labels.node }} {{ $labels.device }}: VRAM is full and buffers spill into system RAM"
+        - alert: DRIGPUHung
+          expr: dri_gpu_hung == 1
+          labels: {severity: critical}
+          annotations:
+            summary: "{{ $labels.node }} {{ $labels.device }}: GPU hung; its pods were evicted and it stays unusable until the node reboots"
+        # Only plugins that try to detect hangs export the gauge.
+        - alert: DRIKernelLogNotWatched
+          expr: dri_kernel_log_watched == 0
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.instance }}: GPU hang detection is off (the plugin cannot read /dev/kmsg)"
         - alert: DRIGPUsSkipped
           expr: dri_gpus_skipped > 0
           for: 30m

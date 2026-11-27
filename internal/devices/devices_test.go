@@ -129,3 +129,21 @@ func TestResourcesNoGPUs(t *testing.T) {
 		t.Fatalf("pools = %+v", res.Pools)
 	}
 }
+
+func TestResourcesTaintsHungGPU(t *testing.T) {
+	c := cfg()
+	c.DriverName = "gpu.example.com"
+	pubs := []devices.Published{
+		{Name: "pci-0000-02-00-0", GPU: gpu("0000:02:00.0", "renderD129"), Vendor: "amd", VRAMTotal: 6144 * mib, VRAMPublished: 5888 * mib, Hung: true},
+		{Name: "pci-0000-06-00-0", GPU: gpu("0000:06:00.0", "renderD128"), Vendor: "amd", VRAMTotal: 6144 * mib, VRAMPublished: 5888 * mib},
+	}
+	devs := devices.Resources(c, pubs).Pools["node-a"].Slices[0].Devices
+	want := []resourceapi.DeviceTaint{{Key: "gpu.example.com/hung", Effect: resourceapi.DeviceTaintEffectNoExecute}}
+	if len(devs[0].Taints) != 1 || devs[0].Taints[0].Key != want[0].Key || devs[0].Taints[0].Effect != want[0].Effect ||
+		devs[0].Taints[0].Value != "" || devs[0].Taints[0].TimeAdded != nil {
+		t.Errorf("hung GPU taints = %+v, want %+v", devs[0].Taints, want)
+	}
+	if len(devs[1].Taints) != 0 {
+		t.Errorf("healthy GPU taints = %+v", devs[1].Taints)
+	}
+}

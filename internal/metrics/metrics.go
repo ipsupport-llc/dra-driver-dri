@@ -2,6 +2,8 @@
 package metrics
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ipsupport-llc/dra-driver-dri/internal/devices"
@@ -15,10 +17,12 @@ var labels = []string{"device", "vendor", "pci_bus_id"}
 type Metrics struct {
 	reg                            *prometheus.Registry
 	total, published, allocated    *prometheus.GaugeVec
+	hung                           *prometheus.GaugeVec
 	claimUsed, claimClaimed        *prometheus.GaugeVec
 	stats                          map[vram.Stat]*prometheus.GaugeVec
-	claims, skipped                prometheus.Gauge
+	claims, skipped, kernelLog     prometheus.Gauge
 	PrepareErrors, DiscoveryErrors prometheus.Counter
+	kernelLogOnce                  sync.Once
 }
 
 func gauge(name, help string) *prometheus.GaugeVec {
@@ -32,6 +36,7 @@ func New() *Metrics {
 		total:     gauge("dri_vram_total_bytes", "VRAM reported by the GPU."),
 		published: gauge("dri_vram_published_bytes", "VRAM offered to the scheduler."),
 		allocated: gauge("dri_vram_allocated_bytes", "VRAM promised to prepared claims."),
+		hung:      gauge("dri_gpu_hung", "1 when the kernel reported this GPU hung during the current boot."),
 		claimUsed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dri_claim_vram_used_bytes",
 			Help: "VRAM a pod actually uses on a device it claimed (DRM fdinfo); compare to its claim.",
@@ -49,10 +54,11 @@ func New() *Metrics {
 		},
 		claims:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "dri_claims_prepared", Help: "Claims prepared on this node."}),
 		skipped:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "dri_gpus_skipped", Help: "GPUs found but not published (unknown VRAM, below the reserve)."}),
+		kernelLog:       prometheus.NewGauge(prometheus.GaugeOpts{Name: "dri_kernel_log_watched", Help: "1 while the kernel log is read for GPU hangs."}),
 		PrepareErrors:   prometheus.NewCounter(prometheus.CounterOpts{Name: "dri_prepare_errors_total", Help: "Failed claim preparations."}),
 		DiscoveryErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "dri_discovery_errors_total", Help: "Failed GPU scans."}),
 	}
-	m.reg.MustRegister(m.total, m.published, m.allocated, m.claimUsed, m.claimClaimed, m.claims, m.skipped, m.PrepareErrors, m.DiscoveryErrors)
+	m.reg.MustRegister(m.total, m.published, m.allocated, m.hung, m.claimUsed, m.claimClaimed, m.claims, m.skipped, m.PrepareErrors, m.DiscoveryErrors)
 	for _, g := range m.stats {
 		m.reg.MustRegister(g)
 	}
@@ -65,7 +71,7 @@ func (m *Metrics) Registry() *prometheus.Registry { return m.reg }
 // Update replaces the per-GPU series with the current state. A reading the
 // backend cannot take leaves its series out.
 func (m *Metrics) Update(pubs []devices.Published, allocated map[string]int64, stats func(sysfs.GPU) vram.Stats, claims int, claimVRAM []ClaimVRAM) {
-	for _, g := range []*prometheus.GaugeVec{m.total, m.published, m.allocated, m.claimUsed, m.claimClaimed} {
+	for _, g := range []*prometheus.GaugeVec{m.total, m.published, m.allocated, m.hung, m.claimUsed, m.claimClaimed} {
 		g.Reset()
 	}
 	for _, g := range m.stats {
@@ -76,6 +82,11 @@ func (m *Metrics) Update(pubs []devices.Published, allocated map[string]int64, s
 		m.total.With(l).Set(float64(p.VRAMTotal))
 		m.published.With(l).Set(float64(p.VRAMPublished))
 		m.allocated.With(l).Set(float64(allocated[p.Name]))
+		hung := 0.0
+		if p.Hung {
+			hung = 1
+		}
+		m.hung.With(l).Set(hung)
 		for k, v := range stats(p.GPU) {
 			if g, ok := m.stats[k]; ok {
 				g.With(l).Set(v)
@@ -92,6 +103,22 @@ func (m *Metrics) Update(pubs []devices.Published, allocated map[string]int64, s
 
 // SetSkipped records how many GPUs the last scan left out.
 func (m *Metrics) SetSkipped(n int) { m.skipped.Set(float64(n)) }
+
+// SetKernelLogWatched records whether GPU hangs are being detected. The
+// gauge appears on the first call, so a plugin that does not try to
+// detect hangs (detection turned off, GPU recovery on) does not export it
+// and an alert on 0 stays quiet.
+func (m *Metrics) SetKernelLogWatched(on bool) {
+	m.kernelLogOnce.Do(func() { m.reg.MustRegister(m.kernelLog) })
+	v := 0.0
+	if on {
+		v = 1
+	}
+	m.kernelLog.Set(v)
+}
+
+// HungGauge exposes the dri_gpu_hung gauge for tests.
+func (m *Metrics) HungGauge() *prometheus.GaugeVec { return m.hung }
 
 // SkippedGauge exposes the dri_gpus_skipped gauge for tests.
 func (m *Metrics) SkippedGauge() prometheus.Gauge { return m.skipped }

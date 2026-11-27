@@ -22,6 +22,7 @@ import (
 
 	"github.com/ipsupport-llc/dra-driver-dri/internal/cdi"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/devices"
+	"github.com/ipsupport-llc/dra-driver-dri/internal/hang"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/metrics"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/prepare"
 	"github.com/ipsupport-llc/dra-driver-dri/internal/state"
@@ -70,8 +71,26 @@ func run() error {
 	}
 
 	m := metrics.New()
-	d := newDriver(devices.Config{NodeName: f.NodeName, ReserveBytes: f.ReserveBytes, Shares: f.DeviceShares}, f.SysRoot, vram.NewDetector(overrides), m, cancel)
+	d := newDriver(devices.Config{NodeName: f.NodeName, DriverName: f.DriverName, ReserveBytes: f.ReserveBytes, Shares: f.DeviceShares}, f.SysRoot, vram.NewDetector(overrides), m, cancel)
 	d.prep = &prepare.Preparer{DriverName: f.DriverName, Inventory: d.Inventory, CDI: writer, Store: store}
+	// GPUs latched earlier in this boot stay tainted whether or not the
+	// kernel log is watched now.
+	bootID, err := hang.BootID("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return err
+	}
+	if d.latch, err = hang.OpenLatch(filepath.Join(pluginDir, "hung.json"), bootID); err != nil {
+		if d.latch == nil {
+			return err
+		}
+		logger.Error(err, "Ignoring the undecodable hung-GPU latch; the next hang overwrites it")
+	}
+	if hung := d.latch.Hung(); len(hung) > 0 {
+		logger.Info("GPUs hung earlier in this boot", "pciBusIDs", hung)
+	}
+	if f.KernelLog != "" {
+		go watchKernelLog(ctx, d, f.KernelLog, f.SysRoot)
+	}
 	if err := d.Refresh(ctx); err != nil {
 		return err
 	}
@@ -134,6 +153,62 @@ func run() error {
 			if err := d.Rescan(ctx, helper); err != nil {
 				logger.Error(err, "Rescan failed")
 			}
+		case <-d.kick:
+			if err := d.Rescan(ctx, helper); err != nil {
+				logger.Error(err, "Rescan failed")
+			}
 		}
 	}
+}
+
+// watchKernelLog follows the kernel log for GPU hangs until ctx ends,
+// reopening it after an error. It starts only once amdgpu runs with
+// gpu_recovery=0: with recovery on, the kernel resets a hung GPU itself.
+// Without access to the kernel log (an unprivileged container cannot open
+// /dev/kmsg) the driver still runs and reports dri_kernel_log_watched 0.
+func watchKernelLog(ctx context.Context, d *Driver, path, sysRoot string) {
+	logger := klog.FromContext(ctx)
+	// amdgpu may load after the plugin starts, and gpu_recovery is a
+	// writable module parameter: check until it reads 0.
+	for {
+		off, err := hang.RecoveryDisabled(sysRoot)
+		if err == nil && off {
+			break
+		}
+		logger.Info("GPU hang detection waits: amdgpu does not run with gpu_recovery=0", "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Minute):
+		}
+	}
+	d.metrics.SetKernelLogWatched(false)
+	for {
+		err := followKernelLog(ctx, d, path)
+		d.metrics.SetKernelLogWatched(false)
+		if ctx.Err() != nil {
+			return
+		}
+		logger.Error(err, "GPU hang detection interrupted, retrying", "path", path)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
+		}
+	}
+}
+
+func followKernelLog(ctx context.Context, d *Driver, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
+	defer func() {
+		if stop() {
+			_ = f.Close()
+		}
+	}()
+	d.metrics.SetKernelLogWatched(true)
+	return hang.Watch(f, func(pci string) { d.OnHang(ctx, pci) })
 }

@@ -21,6 +21,7 @@ func TestUpdate(t *testing.T) {
 	}
 	m.Update(pubs, map[string]int64{"pci-0000-06-00-0": 2147483648}, stats, 1, nil)
 	m.SetSkipped(2)
+	m.SetKernelLogWatched(true)
 	m.PrepareErrors.Inc()
 
 	want := `
@@ -30,6 +31,9 @@ dri_claims_prepared 1
 # HELP dri_gpu_core_clock_hertz GPU core clock.
 # TYPE dri_gpu_core_clock_hertz gauge
 dri_gpu_core_clock_hertz{device="pci-0000-06-00-0",pci_bus_id="0000:06:00.0",vendor="amd"} 8.5e+08
+# HELP dri_gpu_hung 1 when the kernel reported this GPU hung during the current boot.
+# TYPE dri_gpu_hung gauge
+dri_gpu_hung{device="pci-0000-06-00-0",pci_bus_id="0000:06:00.0",vendor="amd"} 0
 # HELP dri_gpu_memory_clock_hertz GPU memory clock.
 # TYPE dri_gpu_memory_clock_hertz gauge
 dri_gpu_memory_clock_hertz{device="pci-0000-06-00-0",pci_bus_id="0000:06:00.0",vendor="amd"} 1.37e+09
@@ -42,6 +46,9 @@ dri_gpus_skipped 2
 # HELP dri_gtt_used_bytes System RAM mapped for the GPU (GTT); grows when VRAM is evicted to RAM.
 # TYPE dri_gtt_used_bytes gauge
 dri_gtt_used_bytes{device="pci-0000-06-00-0",pci_bus_id="0000:06:00.0",vendor="amd"} 2000
+# HELP dri_kernel_log_watched 1 while the kernel log is read for GPU hangs.
+# TYPE dri_kernel_log_watched gauge
+dri_kernel_log_watched 1
 # HELP dri_prepare_errors_total Failed claim preparations.
 # TYPE dri_prepare_errors_total counter
 dri_prepare_errors_total 1
@@ -60,14 +67,21 @@ dri_vram_used_bytes{device="pci-0000-06-00-0",pci_bus_id="0000:06:00.0",vendor="
 `
 	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want),
 		"dri_claims_prepared", "dri_gpus_skipped", "dri_gtt_used_bytes",
-		"dri_gpu_temperature_celsius", "dri_gpu_core_clock_hertz", "dri_gpu_memory_clock_hertz", "dri_prepare_errors_total",
+		"dri_gpu_temperature_celsius", "dri_gpu_core_clock_hertz", "dri_gpu_hung", "dri_kernel_log_watched", "dri_gpu_memory_clock_hertz", "dri_prepare_errors_total",
 		"dri_vram_allocated_bytes", "dri_vram_published_bytes", "dri_vram_total_bytes", "dri_vram_used_bytes"); err != nil {
 		t.Fatal(err)
 	}
 
+	hung := pubs[0]
+	hung.Hung = true
+	m.Update([]devices.Published{hung}, nil, stats, 0, nil)
+	if got := testutil.ToFloat64(m.HungGauge().WithLabelValues("pci-0000-06-00-0", "amd", "0000:06:00.0")); got != 1 {
+		t.Fatalf("dri_gpu_hung = %v for a hung GPU", got)
+	}
+
 	// A GPU that disappears drops out of the gauges.
 	m.Update(nil, nil, stats, 0, nil)
-	for _, name := range []string{"dri_vram_total_bytes", "dri_gtt_used_bytes", "dri_gpu_temperature_celsius"} {
+	for _, name := range []string{"dri_vram_total_bytes", "dri_gtt_used_bytes", "dri_gpu_temperature_celsius", "dri_gpu_hung"} {
 		if n, err := testutil.GatherAndCount(m.Registry(), name); err != nil || n != 0 {
 			t.Fatalf("stale %s series: %d, %v", name, n, err)
 		}
@@ -87,5 +101,17 @@ func TestUpdateUnknownReadings(t *testing.T) {
 	}
 	if n, _ := testutil.GatherAndCount(m.Registry(), "dri_vram_total_bytes"); n != 1 {
 		t.Fatalf("dri_vram_total_bytes: %d series, want 1", n)
+	}
+}
+
+func TestKernelLogGaugeOnlyWhenDetectionRuns(t *testing.T) {
+	m := metrics.New()
+	if n, err := testutil.GatherAndCount(m.Registry(), "dri_kernel_log_watched"); err != nil || n != 0 {
+		t.Fatalf("dri_kernel_log_watched exported before detection started: %d, %v", n, err)
+	}
+	m.SetKernelLogWatched(false)
+	m.SetKernelLogWatched(false)
+	if n, err := testutil.GatherAndCount(m.Registry(), "dri_kernel_log_watched"); err != nil || n != 1 {
+		t.Fatalf("dri_kernel_log_watched series: %d, %v", n, err)
 	}
 }
